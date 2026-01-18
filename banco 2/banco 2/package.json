@@ -1,0 +1,33 @@
+{
+  "name": "cartwave-pix-manager",
+  "version": "1.0.0",
+  "description": "Sistema de gerenciamento de PIX In e PIX Out usando a API CartWave",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "install-deps": "npm install"
+  },
+  "keywords": [
+    "pix",
+    "cartwave",
+    "payment",
+    "banking"
+  ],
+  "author": "Leonardo Guimarães",
+  "license": "MIT",
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
+    "node-html-to-image": "^5.0.0",
+    "openai": "^6.7.0",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
