@@ -8,10 +8,10 @@ const DATA_PATH = process.env.DATA_PATH || path.join(__dirname, 'data');
 const BOTS_FILE = path.join(DATA_PATH, 'bots.json');
 
 // Logos dos bots em base64
-const PAYZU_LOGO = 'data:image/png;base64,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';
+const CREDPIX_LOGO = 'data:image/png;base64,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';
 // Logo do PaySamba otimizada (~9KB) - moeda dourada com $
 const PAYSAMBA_LOGO = require('./paysamba-logo');
-const DEFAULT_LOGO = PAYZU_LOGO;
+const DEFAULT_LOGO = CREDPIX_LOGO;
 
 // Cache em memória
 let botsCache = null;
@@ -35,12 +35,12 @@ function loadBots() {
     if (!fs.existsSync(BOTS_FILE)) {
         // Criar com bots padrão se não existe
         const defaultBots = {
-            payzu: {
-                name: 'PayZu',
+            credpix: {
+                name: 'CREDPIX',
                 whatsappNumber: 'SEU_NUMERO_AQUI',
                 brandLogoBase64: DEFAULT_LOGO,
                 brandPrimaryColor: '#14ce71',
-                brandName: 'PayZu',
+                brandName: 'CREDPIX',
                 zapiInstance: process.env.ZAPI_INSTANCE || '',
                 zapiToken: process.env.ZAPI_TOKEN || '',
                 zapiClientToken: process.env.ZAPI_CLIENT_TOKEN || '',
@@ -90,7 +90,7 @@ function loadBots() {
             console.log('✅ Bot PaySamba adicionado com sucesso!');
         }
 
-        // Migração: garantir que PaySamba usa a logo dourada (não a verde do PayZu)
+        // Migração: garantir que PaySamba usa a logo dourada (não a verde da CREDPIX)
         if (botsCache.paysamba && botsCache.paysamba.brandLogoBase64 !== PAYSAMBA_LOGO) {
             console.log('🔄 Migrando: atualizando logo do PaySamba para moeda dourada...');
             botsCache.paysamba.brandLogoBase64 = PAYSAMBA_LOGO;
@@ -123,24 +123,24 @@ function saveBots() {
 
 /**
  * Buscar bot pelo ID
- * @param {string} botId - ID do bot (ex: 'payzu', 'paysamba')
+ * @param {string} botId - ID do bot (ex: 'credpix', 'paysamba')
  * @returns {object|null} - Bot encontrado ou null
  */
 function getBotById(botId) {
     if (!botsCache) loadBots();
 
     // Normalizar ID para lowercase
-    const normalizedId = (botId || 'payzu').toLowerCase();
+    const normalizedId = (botId || 'credpix').toLowerCase();
 
     const bot = botsCache[normalizedId];
     if (bot && bot.active !== false) {
         return { ...bot, id: normalizedId };
     }
 
-    // Fallback para PayZu se bot não encontrado
-    if (normalizedId !== 'payzu' && botsCache['payzu']) {
-        console.log(`⚠️ Bot "${botId}" não encontrado, usando PayZu como fallback`);
-        return { ...botsCache['payzu'], id: 'payzu' };
+    // Fallback para CREDPIX se bot não encontrado
+    if (normalizedId !== 'credpix' && botsCache['credpix']) {
+        console.log(`⚠️ Bot "${botId}" não encontrado, usando CREDPIX como fallback`);
+        return { ...botsCache['credpix'], id: 'credpix' };
     }
 
     return null;
@@ -271,8 +271,8 @@ function deleteBot(botId) {
         throw new Error('Bot não encontrado');
     }
 
-    if (normalizedId === 'payzu') {
-        throw new Error('Não é possível deletar o bot PayZu padrão');
+    if (normalizedId === 'credpix') {
+        throw new Error('Não é possível deletar o bot CREDPIX padrão');
     }
 
     const name = botsCache[normalizedId].name;
@@ -295,7 +295,7 @@ function getBotBranding(botId) {
 
     if (!bot) {
         return {
-            name: 'PayZu',
+            name: 'CREDPIX',
             logoBase64: DEFAULT_LOGO,
             primaryColor: '#14ce71'
         };
@@ -315,7 +315,7 @@ function getBotBranding(botId) {
  */
 function getBotZapiCredentials(botId) {
     const bot = getBotById(botId);
-    const normalizedId = (botId || 'payzu').toLowerCase();
+    const normalizedId = (botId || 'credpix').toLowerCase();
 
     // Determinar variáveis de ambiente baseado no bot
     let envInstance, envToken, envClientToken;

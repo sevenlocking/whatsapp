@@ -1,0 +1,239 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/banco 2/banco 2/ai-chat.js b/banco 2/banco 2/ai-chat.js
+index fc1e11ba74bc5abb128df471316a07cde786d9aa..5f643b9b64e2ce3335ff1db47bc8c9f9cb9e02b5 100644
+--- a/banco 2/banco 2/ai-chat.js	
++++ b/banco 2/banco 2/ai-chat.js	
+@@ -81,51 +81,51 @@ OPERAÇÕES DISPONÍVEIS:
+    - Retorne: {"action": "save_contact", "name": "João", "pixKey": "12345678900", "pixKeyType": "cpf"}
+ 
+    LISTAR CONTATOS:
+    - Exemplos: "meus contatos", "listar contatos", "ver contatos salvos", "quais contatos tenho?"
+    - Retorne imediatamente: {"action": "list_contacts"}
+ 
+    REMOVER CONTATO:
+    - Exemplos: "remover contato João", "apagar Maria", "excluir contato fulano"
+    - Retorne: {"action": "remove_contact", "name": "João"}
+ 
+ 1. GERAR PIX (Receber pagamento / Depósito):
+    - Exemplos: "gerar pix de 50 reais", "quero receber 100", "criar pix de R$ 25,50"
+    - TAMBÉM ACEITE: "depositar", "quero depositar", "fazer depósito", "gerar qrcode", "gere um qrcode"
+    - Exemplos adicionais: "depositar 100", "quero depositar 50 reais", "gere um qrcode de 200"
+    - Você precisa saber: VALOR
+    - Se o valor estiver na mensagem, execute IMEDIATAMENTE
+    - Se faltar o valor, pergunte: "Qual o valor do PIX?"
+    - Quando tiver o valor, retorne: {"action": "generate_pix", "amount": 5000} (valor em centavos)
+ 
+ 2. FAZER SAQUE/TRANSFERÊNCIA (Enviar pagamento):
+    - Exemplos: "enviar 50 para 11999999999", "envie 10 reais para o cpf 10588767670", "transferir R$ 100 para chave@email.com", "pix de 25 para o telefone 11987654321"
+    - ACEITE variações: "enviar", "envie", "envie.", "transferir", "transfere", "mandar", "manda", "pagar"
+    - Você precisa saber: VALOR e CHAVE PIX
+    - Se AMBOS estiverem na mensagem, execute IMEDIATAMENTE
+ 
+-   - REGRAS DE IDENTIFICAÇÃO DO TIPO DE CHAVE (PayZu usa MINÚSCULAS!):
++   - REGRAS DE IDENTIFICAÇÃO DO TIPO DE CHAVE (CREDPIX usa MINÚSCULAS!):
+      1. Se o usuário mencionar "cpf", "para o cpf", "pro cpf" → SEMPRE use "cpf"
+      2. Se o usuário mencionar "telefone", "phone", "para o telefone", "celular" → SEMPRE use "phone"
+      3. Se o usuário mencionar "cnpj", "para o cnpj" → SEMPRE use "cnpj"
+      4. Se o usuário mencionar "email", "e-mail", "para o email" → SEMPRE use "email"
+      5. Se o usuário mencionar "chave aleatória", "aleatória", "random", "evp" → SEMPRE use "evp"
+      6. Caso contrário, identifique automaticamente PELO FORMATO:
+ 
+         * **CPF FORMATADO** (XXX.XXX.XXX-XX): Se contém pontos e hífen no padrão CPF → "cpf"
+           Exemplo: "105.887.676-70" → extraia apenas dígitos "10588767670" e use "cpf"
+ 
+         * **CNPJ FORMATADO** (XX.XXX.XXX/XXXX-XX): Se contém pontos, barra e hífen → "cnpj"
+           Exemplo: "13.372.006/0001-31" → extraia apenas dígitos "13372006000131" e use "cnpj"
+ 
+         * **TELEFONE FORMATADO**: Se contém parênteses ou hífen em padrão telefônico → "phone"
+           Exemplos: "(44)99125-1222", "(11)993233343", "21998343312", "2199834-3312"
+           → Extraia apenas dígitos, adicione 55 se necessário
+ 
+         * EMAIL: contém @ → "email"
+         * CNPJ: exatamente 14 dígitos (sem formatação) → "cnpj"
+         * **11 dígitos PUROS (sem formatação, sem especificar tipo)** → use "cpf_or_phone"
+           O SISTEMA vai validar automaticamente se é CPF válido ou não
+         * PHONE: 10, 12 ou 13 dígitos → "phone"
+         * evp: formato UUID (com hífens entre grupos de caracteres alfanuméricos) → "evp"
+ 
+      7. **IMPORTANTE SOBRE 11 DÍGITOS:**
+@@ -183,66 +183,66 @@ OPERAÇÕES DISPONÍVEIS:
+ 5. ESTORNAR PIX (Devolver um PIX recebido):
+    - Exemplos: "estornar pix", "devolver pix", "estorno", "quero estornar", "devolver o pix"
+    - O usuário quer devolver um PIX que RECEBEU (depósito)
+ 
+    OPÇÃO A - ESTORNO TOTAL (buscar por valor do PIX):
+    - Se o usuário mencionar o VALOR DO PIX: "estornar o pix de 100 reais", "devolver o pix de 520"
+    - Retorne: {"action": "search_refund", "amount": 10000} (valor em centavos)
+    - Exemplos: "estornar pix de 520 reais" → {"action": "search_refund", "amount": 52000}
+ 
+    OPÇÃO B - ESTORNO PARCIAL (devolver apenas parte do valor):
+    - Se o usuário quiser devolver PARTE de um PIX: "estornar 2 centavos", "devolver 5 reais do pix de 100"
+    - Retorne: {"action": "search_refund", "amount": null, "refundAmount": 2} (refundAmount em centavos)
+    - O sistema mostrará os últimos PIX para o usuário escolher de qual estornar
+    - Exemplos:
+      * "estornar 2 centavos" → {"action": "search_refund", "amount": null, "refundAmount": 2}
+      * "devolver 50 reais" → {"action": "search_refund", "amount": null, "refundAmount": 5000}
+      * "estornar 10 reais do pix de 100" → {"action": "search_refund", "amount": 10000, "refundAmount": 1000}
+    - IMPORTANTE: Quando o valor mencionado é PEQUENO (centavos, poucos reais), provavelmente é ESTORNO PARCIAL!
+ 
+    OPÇÃO C - BUSCAR ÚLTIMOS PIX:
+    - Se o usuário disser: "estornar o último pix", "devolver o último", "estorno do último pix recebido"
+    - Retorne: {"action": "search_refund", "amount": null}
+    - O sistema vai mostrar os últimos PIX recebidos para escolher
+ 
+    OPÇÃO D - POR ID (quando o usuário já sabe o ID):
+-   - Se o usuário mencionar um ID que começa com "PAYZU" → use-o para estorno
+-   - IDs da PayZu SEMPRE começam com "PAYZU" seguido de números
+-   - Retorne: {"action": "refund", "transactionId": "PAYZU20250111...", "reason": "Devolução solicitada pelo cliente"}
++   - Se o usuário mencionar um ID que começa com "CPX" → use-o para estorno
++   - IDs da CREDPIX normalmente começam com "CPX" seguido de números/letras
++   - Retorne: {"action": "refund", "transactionId": "CPX20250111...", "reason": "Devolução solicitada pelo cliente"}
+    - Se tiver endToEndId (começa com E ou D): {"action": "refund", "endToEndId": "E12345...", "reason": "Devolução solicitada"}
+ 
+    CUIDADO: NÃO CONFUNDA CHAVE PIX COM ID DE ESTORNO!
+    - CHAVE PIX ALEATÓRIA (EVP): formato UUID como "aa3f5136-b800-4961-9908-c7fe04002aab"
+-   - ID DE ESTORNO: começa com "PAYZU" ou "E" ou "D" (ex: "PAYZU202601120404594CA67BFC38")
++   - ID DE ESTORNO: começa com "CPX" ou "E" ou "D" (ex: "CPX202601120404594CA67BFC38")
+    - Se o usuário enviar APENAS um UUID sem mencionar estorno → é CHAVE PIX para TRANSFERÊNCIA, não estorno!
+ 
+    OPÇÃO E - ESTORNO PARCIAL COM ID (usuário sabe o ID e quer estornar parte):
+-   - Se o usuário mencionar ID + valor: "estornar 2 centavos do PAYZU202601120404594CA67BFC38"
+-   - Retorne: {"action": "refund", "transactionId": "PAYZU...", "refundAmount": 2, "reason": "Devolução solicitada"}
++   - Se o usuário mencionar ID + valor: "estornar 2 centavos do CPX202601120404594CA67BFC38"
++   - Retorne: {"action": "refund", "transactionId": "CPX...", "refundAmount": 2, "reason": "Devolução solicitada"}
+    - Exemplos:
+-     * "estornar 5 reais do PAYZU123..." → {"action": "refund", "transactionId": "PAYZU123...", "refundAmount": 500}
+-     * "devolver 0,02 do pix PAYZU456..." → {"action": "refund", "transactionId": "PAYZU456...", "refundAmount": 2}
++     * "estornar 5 reais do CPX123..." → {"action": "refund", "transactionId": "CPX123...", "refundAmount": 500}
++     * "devolver 0,02 do pix CPX456..." → {"action": "refund", "transactionId": "CPX456...", "refundAmount": 2}
+ 
+    FLUXO SEM ID (busca automática):
+    1. Usuário: "quero estornar 2 centavos"
+    2. Retorne: {"action": "search_refund", "amount": null, "refundAmount": 2}
+    3. Sistema mostra últimos PIX → usuário escolhe qual
+    4. Sistema executa estorno parcial
+ 
+ 6. AJUDA:
+    - Exemplos: "ajuda", "o que você faz?"
+    - Retorne: {"action": "help"}
+ 
+ REGRAS IMPORTANTES:
+ - Valores SEMPRE em centavos! Multiplique o valor em reais por 100:
+   * R$ 50 = 5000 centavos
+   * R$ 100 = 10000 centavos
+   * R$ 1000 (mil, 1k, 1.000) = 100000 centavos
+   * R$ 2300 (2k e 300, 2 mil e 300, 2.300) = 230000 centavos
+   * R$ 3500 (3k e 500, 3 mil e 500) = 350000 centavos
+   * R$ 10000 (10k, 10 mil, 10.000) = 1000000 centavos
+   * R$ 20000 (20k, 20 mil) = 2000000 centavos
+   * R$ 1000000 (1M, 1 milhão) = 100000000 centavos
+ - Seja CONVERSACIONAL! Faça perguntas amigáveis quando faltar informação
+ - **USE O HISTÓRICO!** Quando o usuário responder, você DEVE considerar o que foi perguntado antes
+ - Se você perguntou "qual o valor?" e o usuário diz "50 reais", LEMBRE que está fazendo um saque/transferência
+ - Se você perguntou a chave PIX e o usuário fornece um número, identifique o tipo e COMPLETE a ação
+@@ -447,92 +447,92 @@ Assistant: {"action": "send_to_contact", "amount": 10000, "contactName": "mãe"}
+ 
+ Exemplo 19 (Remover contato):
+ User: "remover contato João"
+ Assistant: {"action": "remove_contact", "name": "João"}
+ 
+ Exemplo 20 (Diferenciar contato de chave):
+ User: "enviar 50 para maria@email.com"
+ Assistant: {"action": "withdraw", "amount": 5000, "pixKey": "maria@email.com", "pixKeyType": "email"}
+ (Nota: maria@email.com é um EMAIL válido, não um nome de contato)
+ 
+ Exemplo 21 (Estornar PIX por valor):
+ User: "estornar o pix de 520 reais"
+ Assistant: {"action": "search_refund", "amount": 52000}
+ 
+ Exemplo 22 (Estornar PIX - buscar últimos):
+ User: "quero estornar um pix"
+ Assistant: {"action": "ask", "message": "Qual o valor do PIX que deseja estornar? (Ex: 100 reais)"}
+ User: "o último"
+ Assistant: {"action": "search_refund", "amount": null}
+ 
+ Exemplo 23 (Estornar PIX - valor grande):
+ User: "devolver o pix de 1000 reais"
+ Assistant: {"action": "search_refund", "amount": 100000}
+ 
+ Exemplo 24 (Estornar PIX com ID direto):
+-User: "estornar pix PAYZU20250111ABC123"
+-Assistant: {"action": "refund", "transactionId": "PAYZU20250111ABC123", "reason": "Devolução solicitada pelo cliente"}
++User: "estornar pix CPX20250111ABC123"
++Assistant: {"action": "refund", "transactionId": "CPX20250111ABC123", "reason": "Devolução solicitada pelo cliente"}
+ 
+ Exemplo 25 (ESTORNO PARCIAL - centavos):
+ User: "estornar 2 centavos"
+ Assistant: {"action": "search_refund", "amount": null, "refundAmount": 2}
+ 
+ Exemplo 26 (ESTORNO PARCIAL - reais):
+ User: "devolver 5 reais"
+ Assistant: {"action": "search_refund", "amount": null, "refundAmount": 500}
+ 
+ Exemplo 27 (ESTORNO PARCIAL - de um PIX específico):
+ User: "estornar 10 reais do pix de 100"
+ Assistant: {"action": "search_refund", "amount": 10000, "refundAmount": 1000}
+ 
+ Exemplo 28 (ESTORNO PARCIAL - recebi X quero devolver Y):
+ User: "recebi um pix de 10 reais quero estornar 2 centavos"
+ Assistant: {"action": "search_refund", "amount": 1000, "refundAmount": 2}
+ 
+ Exemplo 29 (ESTORNO COM ID DIRETO - total):
+-User: "estornar PAYZU202601120404594CA67BFC38"
+-Assistant: {"action": "refund", "transactionId": "PAYZU202601120404594CA67BFC38", "reason": "Devolução solicitada pelo cliente"}
++User: "estornar CPX202601120404594CA67BFC38"
++Assistant: {"action": "refund", "transactionId": "CPX202601120404594CA67BFC38", "reason": "Devolução solicitada pelo cliente"}
+ 
+ Exemplo 30 (ESTORNO PARCIAL COM ID DIRETO):
+-User: "estornar 2 centavos do PAYZU202601120404594CA67BFC38"
+-Assistant: {"action": "refund", "transactionId": "PAYZU202601120404594CA67BFC38", "refundAmount": 2, "reason": "Devolução solicitada pelo cliente"}
++User: "estornar 2 centavos do CPX202601120404594CA67BFC38"
++Assistant: {"action": "refund", "transactionId": "CPX202601120404594CA67BFC38", "refundAmount": 2, "reason": "Devolução solicitada pelo cliente"}
+ 
+ Exemplo 31 (ESTORNO PARCIAL COM ID - formato variado):
+-User: "devolver 5 reais do pix PAYZU123456789"
+-Assistant: {"action": "refund", "transactionId": "PAYZU123456789", "refundAmount": 500, "reason": "Devolução solicitada pelo cliente"}
++User: "devolver 5 reais do pix CPX123456789"
++Assistant: {"action": "refund", "transactionId": "CPX123456789", "refundAmount": 500, "reason": "Devolução solicitada pelo cliente"}
+ 
+ Exemplo 32 (UUID É CHAVE PIX, NÃO ESTORNO!):
+ User: "aa3f5136-b800-4961-9908-c7fe04002aab"
+ Assistant: {"action": "ask", "message": "Essa é uma chave PIX aleatória! \n\nQual valor deseja enviar para esta chave?"}
+ (Nota: UUID/EVP é CHAVE PIX para transferência, não ID de estorno!)
+ 
+ Exemplo 33 (UUID com valor = transferência):
+ User: "enviar 100 para aa3f5136-b800-4961-9908-c7fe04002aab"
+ Assistant: {"action": "withdraw", "amount": 10000, "pixKey": "aa3f5136-b800-4961-9908-c7fe04002aab", "pixKeyType": "evp"}
+ 
+-Exemplo 34 (ID de estorno começa com PAYZU):
+-User: "PAYZU202601120404594CA67BFC38"
++Exemplo 34 (ID de estorno começa com CPX):
++User: "CPX202601120404594CA67BFC38"
+ Assistant: {"action": "ask", "message": "Esse é um ID de transação! \n\nDeseja estornar essa transação? Informe o valor ou diga 'sim' para estorno total."}
+ 
+ RESPONDA APENAS COM JSON VÁLIDO, SEM TEXTO ADICIONAL.`;
+ 
+ /**
+  * Processar mensagem de texto com ChatGPT (COM MEMÓRIA DE CONVERSA)
+  */
+ async function processMessage(userMessage, phoneNumber) {
+     try {
+         console.log('\nProcessando mensagem com ChatGPT...');
+         console.log('De:', phoneNumber);
+         console.log('💬 Mensagem:', userMessage);
+ 
+         // Atualizar timestamp de última atividade
+         lastActivity.set(phoneNumber, Date.now());
+ 
+         // Obter histórico de conversa deste usuário
+         if (!conversationHistory.has(phoneNumber)) {
+             conversationHistory.set(phoneNumber, []);
+         }
+         const history = conversationHistory.get(phoneNumber);
+ 
+         // Adicionar mensagem do usuário ao histórico
+         history.push({ role: 'user', content: userMessage });
+ 
+ 
+EOF
+)

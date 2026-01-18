@@ -1,0 +1,635 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/banco 2/banco 2/transactions.js b/banco 2/banco 2/transactions.js
+index 52cfe0e385e18badde4dd2a0750f8484f78715b2..3e8941960aafb13f0a5796afbd2faa1136064458 100644
+--- a/banco 2/banco 2/transactions.js	
++++ b/banco 2/banco 2/transactions.js	
+@@ -1,357 +1,353 @@
+-// Serviço de Transações - Armazenar relação transação ↔ usuário
+-require('dotenv').config();
+-const fs = require('fs');
+-const path = require('path');
+-
+-// Caminho dos dados (usar variável de ambiente para Railway Volume)
+-// No Railway, configure DATA_PATH=/data (onde o volume está montado)
+-const DATA_DIR = process.env.DATA_PATH || path.join(__dirname, 'data');
+-const TRANSACTIONS_FILE = path.join(DATA_DIR, 'transactions.json');
+-
+-// Cache em memória para acesso rápido
+-let transactionsCache = {};
+-
+-// Cache de grupos de transferências (para comprovante único)
+-let transferGroupsCache = {};
+-
+-// Garantir que a pasta data existe
+-function ensureDataDir() {
+-    if (!fs.existsSync(DATA_DIR)) {
+-        fs.mkdirSync(DATA_DIR, { recursive: true });
+-    }
+-}
++const db = require('./db');
+ 
+-// Carregar transações do arquivo
+-function loadTransactions() {
+-    ensureDataDir();
+-    try {
+-        if (fs.existsSync(TRANSACTIONS_FILE)) {
+-            const data = fs.readFileSync(TRANSACTIONS_FILE, 'utf-8');
+-            transactionsCache = JSON.parse(data);
+-        }
+-    } catch (error) {
+-        console.error('❌ Erro ao carregar transações:', error.message);
+-        transactionsCache = {};
+-    }
+-    return transactionsCache;
++const transactionsMeta = new Map();
++const transferGroupsCache = {};
++
++function normalizeAmountToDecimal(amountInCents) {
++    return parseFloat((amountInCents / 100).toFixed(2));
+ }
+ 
+-// Salvar transações no arquivo
+-function saveTransactions() {
+-    ensureDataDir();
+-    try {
+-        fs.writeFileSync(TRANSACTIONS_FILE, JSON.stringify(transactionsCache, null, 2));
+-    } catch (error) {
+-        console.error('❌ Erro ao salvar transações:', error.message);
+-    }
++function generateClientReference() {
++    const timestamp = Date.now().toString(36);
++    const random = Math.random().toString(36).substring(2, 8);
++    return `CPX${timestamp}${random}`.toUpperCase();
+ }
+ 
+-// Inicializar cache
+-loadTransactions();
+-
+-/**
+- * Registrar uma nova transação
+- * @param {string} transactionId - ID da transação (PayZu)
+- * @param {string} phoneNumber - Número do usuário
+- * @param {string} type - Tipo: 'pix_in' (receber) ou 'pix_out' (enviar)
+- * @param {number} amount - Valor em centavos
+- * @param {object} details - Detalhes adicionais
+- */
+-function registerTransaction(transactionId, phoneNumber, type, amount, details = {}) {
+-    transactionsCache[transactionId] = {
++async function registerTransaction(transactionId, phoneNumber, type, amount, details = {}) {
++    const createdAt = new Date();
++    const amountDecimal = normalizeAmountToDecimal(amount);
++
++    transactionsMeta.set(transactionId, {
+         phoneNumber,
+         type,
+         amount,
+         status: 'PENDING',
+-        createdAt: new Date().toISOString(),
++        createdAt: createdAt.toISOString(),
+         ...details
+-    };
+-    saveTransactions();
+-    console.log(`📝 Transação registrada: ${transactionId} → ${phoneNumber} (${type})`);
+-    return transactionsCache[transactionId];
++    });
++
++    if (type === 'pix_in') {
++        await db.query(
++            `INSERT INTO pagamentos (
++                chatid,
++                idpagador,
++                valor,
++                tokenuser,
++                identifier,
++                paymentLinkID,
++                brCode,
++                status,
++                nome_cliente,
++                email_cliente,
++                Doc,
++                data_criacao,
++                data_atualizacao,
++                resgatado,
++                endtoend,
++                saldo_antes,
++                saldo_depois
++            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
++            [
++                phoneNumber,
++                details.idpagador || null,
++                amountDecimal,
++                details.tokenuser || null,
++                transactionId,
++                details.paymentLinkID || null,
++                details.brCode || details.qrCodeText || null,
++                'PENDING',
++                details.payerName || null,
++                details.payerEmail || null,
++                details.payerDocument || null,
++                createdAt,
++                createdAt,
++                0,
++                details.endToEndId || null,
++                details.saldoAntes || null,
++                details.saldoDepois || null
++            ]
++        );
++    } else if (type === 'pix_out') {
++        await db.query(
++            `INSERT INTO saques_pix (
++                chatid,
++                tokenuser,
++                value,
++                valorbruto,
++                taxa,
++                name,
++                pixKey,
++                bank,
++                saldoantes,
++                saldodepois,
++                created_at,
++                resgatado,
++                cpf_cnpj,
++                status,
++                txid,
++                end_to_end_id,
++                agencia,
++                conta,
++                data_pagamento,
++                cancel_reason
++            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
++            [
++                phoneNumber,
++                details.tokenuser || null,
++                amountDecimal,
++                amountDecimal,
++                details.taxa || null,
++                details.receiverName || null,
++                details.pixKey || null,
++                details.bank || null,
++                details.saldoAntes || null,
++                details.saldoDepois || null,
++                createdAt,
++                0,
++                details.cpfCnpj || null,
++                'PENDING',
++                transactionId,
++                details.endToEndId || null,
++                details.agencia || null,
++                details.conta || null,
++                null,
++                null
++            ]
++        );
++    }
++
++    return transactionsMeta.get(transactionId);
+ }
+ 
+-/**
+- * Buscar transação por ID
+- * @param {string} transactionId - ID da transação
+- */
+-function getTransaction(transactionId) {
+-    return transactionsCache[transactionId] || null;
++async function getTransaction(transactionId) {
++    if (transactionsMeta.has(transactionId)) {
++        return transactionsMeta.get(transactionId);
++    }
++
++    const pagamentoRows = await db.query(
++        'SELECT chatid, status, valor, identifier FROM pagamentos WHERE identifier = ? LIMIT 1',
++        [transactionId]
++    );
++
++    if (pagamentoRows.length > 0) {
++        const row = pagamentoRows[0];
++        const transaction = {
++            phoneNumber: row.chatid,
++            type: 'pix_in',
++            amount: Math.round(parseFloat(row.valor) * 100),
++            status: row.status || 'PENDING'
++        };
++        transactionsMeta.set(transactionId, transaction);
++        return transaction;
++    }
++
++    const saqueRows = await db.query(
++        'SELECT chatid, status, value, txid FROM saques_pix WHERE txid = ? LIMIT 1',
++        [transactionId]
++    );
++
++    if (saqueRows.length > 0) {
++        const row = saqueRows[0];
++        const transaction = {
++            phoneNumber: row.chatid,
++            type: 'pix_out',
++            amount: Math.round(parseFloat(row.value) * 100),
++            status: row.status || 'PENDING'
++        };
++        transactionsMeta.set(transactionId, transaction);
++        return transaction;
++    }
++
++    return null;
+ }
+ 
+-/**
+- * Atualizar status de uma transação
+- * @param {string} transactionId - ID da transação
+- * @param {string} status - Novo status
+- * @param {object} webhookData - Dados do webhook
+- */
+-function updateTransaction(transactionId, status, webhookData = {}) {
+-    if (!transactionsCache[transactionId]) {
+-        console.log(`⚠️ Transação não encontrada: ${transactionId}`);
+-        return null;
++async function updateTransaction(transactionId, status, webhookData = {}) {
++    const updatedAt = new Date();
++    const endToEndId = webhookData.endToEndId || webhookData.end_to_end_id || null;
++
++    const pagamentoRows = await db.query(
++        'SELECT id FROM pagamentos WHERE identifier = ? LIMIT 1',
++        [transactionId]
++    );
++
++    if (pagamentoRows.length > 0) {
++        await db.query(
++            `UPDATE pagamentos
++             SET status = ?, data_atualizacao = ?, endtoend = COALESCE(?, endtoend)
++             WHERE identifier = ?`,
++            [status, updatedAt, endToEndId, transactionId]
++        );
++    } else {
++        await db.query(
++            `UPDATE saques_pix
++             SET status = ?, data_pagamento = CASE WHEN ? = 'COMPLETED' THEN ? ELSE data_pagamento END,
++                 end_to_end_id = COALESCE(?, end_to_end_id)
++             WHERE txid = ?`,
++            [status, status, updatedAt, endToEndId, transactionId]
++        );
+     }
+ 
+-    transactionsCache[transactionId] = {
+-        ...transactionsCache[transactionId],
++    const existing = transactionsMeta.get(transactionId) || {};
++    const updated = {
++        ...existing,
+         status,
+-        updatedAt: new Date().toISOString(),
++        updatedAt: updatedAt.toISOString(),
+         webhookData
+     };
+-    saveTransactions();
+-    console.log(`✅ Transação atualizada: ${transactionId} → ${status}`);
+-    return transactionsCache[transactionId];
+-}
+-
+-/**
+- * Listar transações de um usuário
+- * @param {string} phoneNumber - Número do usuário
+- * @param {number} limit - Limite de resultados
+- */
+-function listUserTransactions(phoneNumber, limit = 10) {
+-    const userTransactions = Object.entries(transactionsCache)
+-        .filter(([_, tx]) => tx.phoneNumber === phoneNumber)
+-        .sort((a, b) => new Date(b[1].createdAt) - new Date(a[1].createdAt))
+-        .slice(0, limit)
+-        .map(([id, tx]) => ({ id, ...tx }));
+-
+-    return userTransactions;
++    transactionsMeta.set(transactionId, updated);
++    return updated;
+ }
+ 
+-/**
+- * Buscar PIX recebidos por valor (para estorno)
+- * @param {string} phoneNumber - Número do usuário
+- * @param {number} amount - Valor em centavos (opcional)
+- * @param {number} limit - Limite de resultados
+- * @returns {array} - Lista de transações PIX In que podem ser estornadas
+- */
+-function findRefundableTransactions(phoneNumber, amount = null, limit = 5) {
+-    const refundable = Object.entries(transactionsCache)
+-        .filter(([_, tx]) => {
+-            // Deve ser do usuário
+-            if (tx.phoneNumber !== phoneNumber) return false;
+-            // Deve ser PIX recebido (depósito)
+-            if (tx.type !== 'pix_in') return false;
+-            // Deve estar COMPLETED (pago)
+-            if (tx.status !== 'COMPLETED') return false;
+-            // Se especificou valor, filtrar por valor
+-            if (amount !== null && tx.amount !== amount) return false;
+-            // Não pode já ter sido estornado
+-            if (tx.refunded) return false;
+-            return true;
+-        })
+-        .sort((a, b) => new Date(b[1].createdAt) - new Date(a[1].createdAt))
++async function listUserTransactions(phoneNumber, limit = 10) {
++    const pagamentos = await db.query(
++        `SELECT identifier AS id, status, valor, data_criacao AS createdAt, 'pix_in' AS type
++         FROM pagamentos
++         WHERE chatid = ?
++         ORDER BY data_criacao DESC
++         LIMIT ?`,
++        [phoneNumber, limit]
++    );
++
++    const saques = await db.query(
++        `SELECT txid AS id, status, value AS valor, created_at AS createdAt, 'pix_out' AS type
++         FROM saques_pix
++         WHERE chatid = ?
++         ORDER BY created_at DESC
++         LIMIT ?`,
++        [phoneNumber, limit]
++    );
++
++    const combined = [...pagamentos, ...saques]
++        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+         .slice(0, limit)
+-        .map(([id, tx]) => ({ id, ...tx }));
+-
+-    return refundable;
++        .map(entry => ({
++            id: entry.id,
++            type: entry.type,
++            amount: Math.round(parseFloat(entry.valor) * 100),
++            status: entry.status,
++            createdAt: entry.createdAt
++        }));
++
++    return combined;
+ }
+ 
+-/**
+- * Marcar transação como estornada
+- * @param {string} transactionId - ID da transação
+- */
+-function markAsRefunded(transactionId) {
+-    if (!transactionsCache[transactionId]) {
+-        return null;
++async function findRefundableTransactions(phoneNumber, amount = null, limit = 5) {
++    const params = [phoneNumber];
++    let amountFilter = '';
++    if (amount !== null) {
++        amountFilter = 'AND valor = ?';
++        params.push(normalizeAmountToDecimal(amount));
+     }
+-    transactionsCache[transactionId].refunded = true;
+-    transactionsCache[transactionId].refundedAt = new Date().toISOString();
+-    saveTransactions();
+-    console.log(`↩️ Transação marcada como estornada: ${transactionId}`);
+-    return transactionsCache[transactionId];
++    params.push(limit);
++
++    const rows = await db.query(
++        `SELECT identifier AS id, valor, status, data_criacao AS createdAt, resgatado
++         FROM pagamentos
++         WHERE chatid = ?
++           AND status = 'COMPLETED'
++           AND resgatado = 0
++           ${amountFilter}
++         ORDER BY data_criacao DESC
++         LIMIT ?`,
++        params
++    );
++
++    return rows.map(row => ({
++        id: row.id,
++        phoneNumber,
++        type: 'pix_in',
++        amount: Math.round(parseFloat(row.valor) * 100),
++        status: row.status,
++        createdAt: row.createdAt,
++        refunded: row.resgatado === 1
++    }));
+ }
+ 
+-/**
+- * Limpar transações antigas (mais de 7 dias)
+- */
+-function cleanOldTransactions() {
+-    const now = Date.now();
+-    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+-    let cleaned = 0;
+-
+-    for (const [id, tx] of Object.entries(transactionsCache)) {
+-        const createdAt = new Date(tx.createdAt).getTime();
+-        if (now - createdAt > SEVEN_DAYS) {
+-            delete transactionsCache[id];
+-            cleaned++;
+-        }
++async function markAsRefunded(transactionId) {
++    await db.query(
++        'UPDATE pagamentos SET resgatado = 1 WHERE identifier = ?',
++        [transactionId]
++    );
++    const existing = transactionsMeta.get(transactionId);
++    if (existing) {
++        existing.refunded = true;
++        existing.refundedAt = new Date().toISOString();
++        transactionsMeta.set(transactionId, existing);
++        return existing;
+     }
+-
+-    if (cleaned > 0) {
+-        saveTransactions();
+-        console.log(`🧹 Limpou ${cleaned} transações antigas`);
+-    }
+-}
+-
+-// Limpar transações antigas a cada hora
+-setInterval(cleanOldTransactions, 60 * 60 * 1000);
+-
+-/**
+- * Gerar ID único para clientReference
+- */
+-function generateClientReference() {
+-    const timestamp = Date.now().toString(36);
+-    const random = Math.random().toString(36).substring(2, 8);
+-    return `WF${timestamp}${random}`.toUpperCase();
++    return null;
+ }
+ 
+-/**
+- * Criar grupo de transferências (para comprovante único)
+- * @param {string} groupId - ID único do grupo (clientReference)
+- * @param {string} phoneNumber - Número do usuário
+- * @param {number} totalAmount - Valor total em centavos
+- * @param {number} totalTransactions - Quantidade de transações no grupo
+- * @param {object} details - Detalhes adicionais (pixKey, receiverName, etc)
+- */
+ function createTransferGroup(groupId, phoneNumber, totalAmount, totalTransactions, details = {}) {
+     transferGroupsCache[groupId] = {
+         phoneNumber,
+         totalAmount,
+         totalTransactions,
+         completedTransactions: 0,
+         failedTransactions: 0,
+-        completedAmount: 0, // Valor total das transações que deram certo (centavos)
+-        failedAmount: 0, // Valor total das transações que falharam (centavos)
++        completedAmount: 0,
++        failedAmount: 0,
+         transactionIds: [],
+-        failedIds: [], // IDs das transações que falharam
++        failedIds: [],
+         status: 'PENDING',
+         createdAt: new Date().toISOString(),
+         ...details
+     };
+     console.log(`📦 Grupo de transferências criado: ${groupId} (${totalTransactions} transações)`);
+     return transferGroupsCache[groupId];
+ }
+ 
+-/**
+- * Adicionar transação a um grupo
+- * @param {string} groupId - ID do grupo
+- * @param {string} transactionId - ID da transação individual
+- */
+ function addTransactionToGroup(groupId, transactionId) {
+     if (!transferGroupsCache[groupId]) {
+         console.log(`⚠️ Grupo não encontrado: ${groupId}`);
+         return null;
+     }
+     transferGroupsCache[groupId].transactionIds.push(transactionId);
+     console.log(`   ➕ Transação ${transactionId} adicionada ao grupo ${groupId}`);
+     return transferGroupsCache[groupId];
+ }
+ 
+-/**
+- * Marcar transação do grupo como completa
+- * @param {string} groupId - ID do grupo
+- * @param {number} amount - Valor da transação em centavos (opcional, para cálculo de valor parcial)
+- * @returns {object|null} - Retorna o grupo se todas transações foram resolvidas, null caso contrário
+- */
+-function markGroupTransactionComplete(groupId, amount = 0) {
+-    if (!transferGroupsCache[groupId]) {
+-        return null;
+-    }
+-
+-    transferGroupsCache[groupId].completedTransactions++;
+-    if (amount > 0) {
+-        transferGroupsCache[groupId].completedAmount += amount;
+-    }
++function markGroupTransactionComplete(groupId, amount) {
+     const group = transferGroupsCache[groupId];
++    if (!group) return null;
++
++    group.completedTransactions += 1;
++    group.completedAmount += amount;
+ 
+-    const totalResolved = group.completedTransactions + group.failedTransactions;
+-    console.log(`   ✅ Grupo ${groupId}: ${group.completedTransactions}/${group.totalTransactions} completas (${group.failedTransactions} falhas)`);
+-
+-    // Se todas as transações foram resolvidas (sucesso OU falha), retornar o grupo
+-    if (totalResolved >= group.totalTransactions) {
+-        if (group.failedTransactions === 0) {
+-            group.status = 'COMPLETED';
+-            console.log(`   🎉 Grupo ${groupId} COMPLETO! Gerar comprovante único.`);
+-        } else if (group.completedTransactions === 0) {
+-            group.status = 'FAILED';
+-            console.log(`   ❌ Grupo ${groupId} FALHOU! Todas transações falharam.`);
+-        } else {
+-            group.status = 'PARTIAL';
+-            console.log(`   ⚠️ Grupo ${groupId} PARCIAL! ${group.completedTransactions} OK, ${group.failedTransactions} falhas. Gerar comprovante parcial.`);
+-        }
+-        group.completedAt = new Date().toISOString();
++    if (group.completedTransactions + group.failedTransactions >= group.totalTransactions) {
++        group.status = group.failedTransactions > 0 ? 'PARTIAL' : 'COMPLETED';
+         return group;
+     }
+-
+     return null;
+ }
+ 
+-/**
+- * Marcar transação do grupo como falha
+- * @param {string} groupId - ID do grupo
+- * @param {number} amount - Valor da transação que falhou em centavos
+- * @param {string} transactionId - ID da transação que falhou (opcional)
+- * @returns {object|null} - Retorna o grupo se todas transações foram resolvidas, null caso contrário
+- */
+-function markGroupTransactionFailed(groupId, amount = 0, transactionId = null) {
+-    if (!transferGroupsCache[groupId]) {
+-        return null;
+-    }
++function markGroupTransactionFailed(groupId, amount, transactionId) {
++    const group = transferGroupsCache[groupId];
++    if (!group) return null;
+ 
+-    transferGroupsCache[groupId].failedTransactions++;
+-    if (amount > 0) {
+-        transferGroupsCache[groupId].failedAmount += amount;
+-    }
++    group.failedTransactions += 1;
++    group.failedAmount += amount;
+     if (transactionId) {
+-        transferGroupsCache[groupId].failedIds.push(transactionId);
++        group.failedIds.push(transactionId);
+     }
+-    const group = transferGroupsCache[groupId];
+ 
+-    const totalResolved = group.completedTransactions + group.failedTransactions;
+-    console.log(`   ❌ Grupo ${groupId}: falha registrada. ${group.completedTransactions}/${group.totalTransactions} OK, ${group.failedTransactions} falhas`);
+-
+-    // Se todas as transações foram resolvidas (sucesso OU falha), retornar o grupo
+-    if (totalResolved >= group.totalTransactions) {
+-        if (group.completedTransactions === 0) {
+-            group.status = 'FAILED';
+-            console.log(`   ❌ Grupo ${groupId} FALHOU! Todas transações falharam.`);
+-        } else {
+-            group.status = 'PARTIAL';
+-            console.log(`   ⚠️ Grupo ${groupId} PARCIAL! ${group.completedTransactions} OK, ${group.failedTransactions} falhas. Gerar comprovante parcial.`);
+-        }
+-        group.completedAt = new Date().toISOString();
++    if (group.completedTransactions + group.failedTransactions >= group.totalTransactions) {
++        group.status = group.completedTransactions > 0 ? 'PARTIAL' : 'FAILED';
+         return group;
+     }
+-
+-    return null;
+-}
+-
+-/**
+- * Buscar grupo por ID
+- * @param {string} groupId - ID do grupo
+- */
+-function getTransferGroup(groupId) {
+-    return transferGroupsCache[groupId] || null;
+-}
+-
+-/**
+- * Buscar grupo pelo ID de uma transação
+- * @param {string} transactionId - ID da transação
+- */
+-function getGroupByTransactionId(transactionId) {
+-    for (const [groupId, group] of Object.entries(transferGroupsCache)) {
+-        if (group.transactionIds.includes(transactionId)) {
+-            return { groupId, ...group };
+-        }
+-    }
+     return null;
+ }
+ 
+ module.exports = {
+     registerTransaction,
+     getTransaction,
+     updateTransaction,
+     listUserTransactions,
+-    cleanOldTransactions,
+-    // Estorno
+     findRefundableTransactions,
+     markAsRefunded,
+-    // Grupos de transferências
+     generateClientReference,
+     createTransferGroup,
+     addTransactionToGroup,
+     markGroupTransactionComplete,
+-    markGroupTransactionFailed,
+-    getTransferGroup,
+-    getGroupByTransactionId
++    markGroupTransactionFailed
+ };
+ 
+EOF
+)

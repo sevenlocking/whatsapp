@@ -178,11 +178,11 @@ function generateTenantId() {
 function createTenant(data) {
     if (!tenantsCache) loadTenants();
 
-    const { name, payzuToken, myPixKey, authorizedNumbers, allowedBots } = data;
+    const { name, platformToken, myPixKey, authorizedNumbers, allowedBots } = data;
 
     // Validações
-    if (!name || !payzuToken) {
-        throw new Error('Nome e token PayZu são obrigatórios');
+    if (!name || !platformToken) {
+        throw new Error('Nome e token CREDPIX são obrigatórios');
     }
 
     // Verificar se algum número já está em uso por outro tenant
@@ -200,7 +200,7 @@ function createTenant(data) {
 
     const newTenant = {
         name: name.trim(),
-        payzuToken: payzuToken.trim(),
+        platformToken: platformToken.trim(),
         myPixKey: myPixKey ? myPixKey.trim() : null,
         authorizedNumbers: authorizedNumbers || [],
         allowedBots: allowedBots || [], // Bots permitidos (vazio = todos)
@@ -230,7 +230,7 @@ function updateTenant(tenantId, data) {
         throw new Error('Tenant não encontrado');
     }
 
-    const { name, payzuToken, myPixKey, authorizedNumbers, allowedBots, active } = data;
+    const { name, platformToken, myPixKey, authorizedNumbers, allowedBots, active } = data;
 
     // Verificar se algum número novo já está em uso por outro tenant
     if (authorizedNumbers && authorizedNumbers.length > 0) {
@@ -244,7 +244,7 @@ function updateTenant(tenantId, data) {
 
     // Atualizar apenas campos fornecidos
     if (name !== undefined) tenantsCache[tenantId].name = name.trim();
-    if (payzuToken !== undefined) tenantsCache[tenantId].payzuToken = payzuToken.trim();
+    if (platformToken !== undefined) tenantsCache[tenantId].platformToken = platformToken.trim();
     if (myPixKey !== undefined) tenantsCache[tenantId].myPixKey = myPixKey ? myPixKey.trim() : null;
     if (authorizedNumbers !== undefined) tenantsCache[tenantId].authorizedNumbers = authorizedNumbers;
     if (allowedBots !== undefined) tenantsCache[tenantId].allowedBots = allowedBots;

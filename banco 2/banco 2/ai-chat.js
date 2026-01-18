@@ -103,7 +103,7 @@ OPERAÇÕES DISPONÍVEIS:
    - Você precisa saber: VALOR e CHAVE PIX
    - Se AMBOS estiverem na mensagem, execute IMEDIATAMENTE
 
-   - REGRAS DE IDENTIFICAÇÃO DO TIPO DE CHAVE (PayZu usa MINÚSCULAS!):
+   - REGRAS DE IDENTIFICAÇÃO DO TIPO DE CHAVE (CREDPIX usa MINÚSCULAS!):
      1. Se o usuário mencionar "cpf", "para o cpf", "pro cpf" → SEMPRE use "cpf"
      2. Se o usuário mencionar "telefone", "phone", "para o telefone", "celular" → SEMPRE use "phone"
      3. Se o usuário mencionar "cnpj", "para o cnpj" → SEMPRE use "cnpj"
@@ -205,22 +205,22 @@ OPERAÇÕES DISPONÍVEIS:
    - O sistema vai mostrar os últimos PIX recebidos para escolher
 
    OPÇÃO D - POR ID (quando o usuário já sabe o ID):
-   - Se o usuário mencionar um ID que começa com "PAYZU" → use-o para estorno
-   - IDs da PayZu SEMPRE começam com "PAYZU" seguido de números
-   - Retorne: {"action": "refund", "transactionId": "PAYZU20250111...", "reason": "Devolução solicitada pelo cliente"}
+   - Se o usuário mencionar um ID que começa com "CPIX_" → use-o para estorno
+   - IDs da CREDPIX normalmente começam com "CPIX_" seguido de números/letras
+   - Retorne: {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "reason": "Devolução solicitada pelo cliente"}
    - Se tiver endToEndId (começa com E ou D): {"action": "refund", "endToEndId": "E12345...", "reason": "Devolução solicitada"}
 
    CUIDADO: NÃO CONFUNDA CHAVE PIX COM ID DE ESTORNO!
    - CHAVE PIX ALEATÓRIA (EVP): formato UUID como "aa3f5136-b800-4961-9908-c7fe04002aab"
-   - ID DE ESTORNO: começa com "PAYZU" ou "E" ou "D" (ex: "PAYZU202601120404594CA67BFC38")
+   - ID DE ESTORNO: começa com "CPIX_" ou "E" ou "D" (ex: "CPIX_66d1cd6fccc027.73197593")
    - Se o usuário enviar APENAS um UUID sem mencionar estorno → é CHAVE PIX para TRANSFERÊNCIA, não estorno!
 
    OPÇÃO E - ESTORNO PARCIAL COM ID (usuário sabe o ID e quer estornar parte):
-   - Se o usuário mencionar ID + valor: "estornar 2 centavos do PAYZU202601120404594CA67BFC38"
-   - Retorne: {"action": "refund", "transactionId": "PAYZU...", "refundAmount": 2, "reason": "Devolução solicitada"}
+   - Se o usuário mencionar ID + valor: "estornar 2 centavos do CPIX_66d1cd6fccc027.73197593"
+   - Retorne: {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "refundAmount": 2, "reason": "Devolução solicitada"}
    - Exemplos:
-     * "estornar 5 reais do PAYZU123..." → {"action": "refund", "transactionId": "PAYZU123...", "refundAmount": 500}
-     * "devolver 0,02 do pix PAYZU456..." → {"action": "refund", "transactionId": "PAYZU456...", "refundAmount": 2}
+     * "estornar 5 reais do CPIX_66d1cd6fccc027.73197593" → {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "refundAmount": 500}
+     * "devolver 0,02 do pix CPIX_66d1cd6fccc027.73197593" → {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "refundAmount": 2}
 
    FLUXO SEM ID (busca automática):
    1. Usuário: "quero estornar 2 centavos"
@@ -231,6 +231,11 @@ OPERAÇÕES DISPONÍVEIS:
 6. AJUDA:
    - Exemplos: "ajuda", "o que você faz?"
    - Retorne: {"action": "help"}
+
+7. VERIFICAR PAGAMENTO:
+   - Exemplos: "já paguei", "verificar pagamento", "pix foi pago?"
+   - Se o usuário informar o ID do pagamento (CPIX_...), inclua transactionId
+   - Retorne: {"action": "verify_payment", "transactionId": "CPIX_66d1cd6fccc027.73197593"} ou {"action": "verify_payment"}
 
 REGRAS IMPORTANTES:
 - Valores SEMPRE em centavos! Multiplique o valor em reais por 100:
@@ -469,8 +474,8 @@ User: "devolver o pix de 1000 reais"
 Assistant: {"action": "search_refund", "amount": 100000}
 
 Exemplo 24 (Estornar PIX com ID direto):
-User: "estornar pix PAYZU20250111ABC123"
-Assistant: {"action": "refund", "transactionId": "PAYZU20250111ABC123", "reason": "Devolução solicitada pelo cliente"}
+User: "estornar pix CPIX_66d1cd6fccc027.73197593"
+Assistant: {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "reason": "Devolução solicitada pelo cliente"}
 
 Exemplo 25 (ESTORNO PARCIAL - centavos):
 User: "estornar 2 centavos"
@@ -489,16 +494,16 @@ User: "recebi um pix de 10 reais quero estornar 2 centavos"
 Assistant: {"action": "search_refund", "amount": 1000, "refundAmount": 2}
 
 Exemplo 29 (ESTORNO COM ID DIRETO - total):
-User: "estornar PAYZU202601120404594CA67BFC38"
-Assistant: {"action": "refund", "transactionId": "PAYZU202601120404594CA67BFC38", "reason": "Devolução solicitada pelo cliente"}
+User: "estornar CPIX_66d1cd6fccc027.73197593"
+Assistant: {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "reason": "Devolução solicitada pelo cliente"}
 
 Exemplo 30 (ESTORNO PARCIAL COM ID DIRETO):
-User: "estornar 2 centavos do PAYZU202601120404594CA67BFC38"
-Assistant: {"action": "refund", "transactionId": "PAYZU202601120404594CA67BFC38", "refundAmount": 2, "reason": "Devolução solicitada pelo cliente"}
+User: "estornar 2 centavos do CPIX_66d1cd6fccc027.73197593"
+Assistant: {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "refundAmount": 2, "reason": "Devolução solicitada pelo cliente"}
 
 Exemplo 31 (ESTORNO PARCIAL COM ID - formato variado):
-User: "devolver 5 reais do pix PAYZU123456789"
-Assistant: {"action": "refund", "transactionId": "PAYZU123456789", "refundAmount": 500, "reason": "Devolução solicitada pelo cliente"}
+User: "devolver 5 reais do pix CPIX_66d1cd6fccc027.73197593"
+Assistant: {"action": "refund", "transactionId": "CPIX_66d1cd6fccc027.73197593", "refundAmount": 500, "reason": "Devolução solicitada pelo cliente"}
 
 Exemplo 32 (UUID É CHAVE PIX, NÃO ESTORNO!):
 User: "aa3f5136-b800-4961-9908-c7fe04002aab"
@@ -509,8 +514,8 @@ Exemplo 33 (UUID com valor = transferência):
 User: "enviar 100 para aa3f5136-b800-4961-9908-c7fe04002aab"
 Assistant: {"action": "withdraw", "amount": 10000, "pixKey": "aa3f5136-b800-4961-9908-c7fe04002aab", "pixKeyType": "evp"}
 
-Exemplo 34 (ID de estorno começa com PAYZU):
-User: "PAYZU202601120404594CA67BFC38"
+Exemplo 34 (ID de estorno começa com CPIX_):
+User: "CPIX_66d1cd6fccc027.73197593"
 Assistant: {"action": "ask", "message": "Esse é um ID de transação! \n\nDeseja estornar essa transação? Informe o valor ou diga 'sim' para estorno total."}
 
 RESPONDA APENAS COM JSON VÁLIDO, SEM TEXTO ADICIONAL.`;

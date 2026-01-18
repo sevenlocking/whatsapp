@@ -1,0 +1,132 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/banco 2/banco 2/tenants.js b/banco 2/banco 2/tenants.js
+index 11e695f19bb3abe94b6f6e85e5fad61b14ced97c..86293f5a14e57b4e281ca1c44a5348871109619d 100644
+--- a/banco 2/banco 2/tenants.js	
++++ b/banco 2/banco 2/tenants.js	
+@@ -156,117 +156,117 @@ function listTenants() {
+     if (!tenantsCache) loadTenants();
+ 
+     return Object.entries(tenantsCache).map(([id, tenant]) => ({
+         id,
+         ...tenant
+     }));
+ }
+ 
+ /**
+  * Gerar ID único para tenant
+  */
+ function generateTenantId() {
+     const timestamp = Date.now().toString(36);
+     const random = Math.random().toString(36).substring(2, 8);
+     return `tenant_${timestamp}${random}`;
+ }
+ 
+ /**
+  * Criar novo tenant
+  * @param {object} data - Dados do tenant
+  * @returns {object} - Tenant criado
+  */
+ function createTenant(data) {
+     if (!tenantsCache) loadTenants();
+ 
+-    const { name, payzuToken, myPixKey, authorizedNumbers, allowedBots } = data;
++    const { name, platformToken, myPixKey, authorizedNumbers, allowedBots } = data;
+ 
+     // Validações
+-    if (!name || !payzuToken) {
+-        throw new Error('Nome e token PayZu são obrigatórios');
++    if (!name || !platformToken) {
++        throw new Error('Nome e token CREDPIX são obrigatórios');
+     }
+ 
+     // Verificar se algum número já está em uso por outro tenant
+     if (authorizedNumbers && authorizedNumbers.length > 0) {
+         for (const phone of authorizedNumbers) {
+             const existingTenant = getTenantByPhone(phone);
+             if (existingTenant) {
+                 throw new Error(`Número ${phone} já está em uso pelo cliente "${existingTenant.name}"`);
+             }
+         }
+     }
+ 
+     const tenantId = generateTenantId();
+     const now = new Date().toISOString();
+ 
+     const newTenant = {
+         name: name.trim(),
+-        payzuToken: payzuToken.trim(),
++        platformToken: platformToken.trim(),
+         myPixKey: myPixKey ? myPixKey.trim() : null,
+         authorizedNumbers: authorizedNumbers || [],
+         allowedBots: allowedBots || [], // Bots permitidos (vazio = todos)
+         active: true,
+         createdAt: now,
+         updatedAt: now
+     };
+ 
+     tenantsCache[tenantId] = newTenant;
+     saveTenants();
+ 
+     console.log(`✅ Tenant criado: ${name} (${tenantId})`);
+ 
+     return { id: tenantId, ...newTenant };
+ }
+ 
+ /**
+  * Atualizar tenant existente
+  * @param {string} tenantId - ID do tenant
+  * @param {object} data - Dados para atualizar
+  * @returns {object} - Tenant atualizado
+  */
+ function updateTenant(tenantId, data) {
+     if (!tenantsCache) loadTenants();
+ 
+     if (!tenantsCache[tenantId]) {
+         throw new Error('Tenant não encontrado');
+     }
+ 
+-    const { name, payzuToken, myPixKey, authorizedNumbers, allowedBots, active } = data;
++    const { name, platformToken, myPixKey, authorizedNumbers, allowedBots, active } = data;
+ 
+     // Verificar se algum número novo já está em uso por outro tenant
+     if (authorizedNumbers && authorizedNumbers.length > 0) {
+         for (const phone of authorizedNumbers) {
+             const existingTenant = getTenantByPhone(phone);
+             if (existingTenant && existingTenant.id !== tenantId) {
+                 throw new Error(`Número ${phone} já está em uso pelo cliente "${existingTenant.name}"`);
+             }
+         }
+     }
+ 
+     // Atualizar apenas campos fornecidos
+     if (name !== undefined) tenantsCache[tenantId].name = name.trim();
+-    if (payzuToken !== undefined) tenantsCache[tenantId].payzuToken = payzuToken.trim();
++    if (platformToken !== undefined) tenantsCache[tenantId].platformToken = platformToken.trim();
+     if (myPixKey !== undefined) tenantsCache[tenantId].myPixKey = myPixKey ? myPixKey.trim() : null;
+     if (authorizedNumbers !== undefined) tenantsCache[tenantId].authorizedNumbers = authorizedNumbers;
+     if (allowedBots !== undefined) tenantsCache[tenantId].allowedBots = allowedBots;
+     if (active !== undefined) tenantsCache[tenantId].active = active;
+ 
+     tenantsCache[tenantId].updatedAt = new Date().toISOString();
+ 
+     saveTenants();
+ 
+     console.log(`✅ Tenant atualizado: ${tenantsCache[tenantId].name} (${tenantId})`);
+ 
+     return { id: tenantId, ...tenantsCache[tenantId] };
+ }
+ 
+ /**
+  * Deletar tenant
+  * @param {string} tenantId - ID do tenant
+  * @returns {boolean} - Sucesso
+  */
+ function deleteTenant(tenantId) {
+     if (!tenantsCache) loadTenants();
+ 
+     if (!tenantsCache[tenantId]) {
+         throw new Error('Tenant não encontrado');
+     }
+ 
+EOF
+)

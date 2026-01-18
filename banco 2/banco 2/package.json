@@ -25,7 +25,8 @@
     "node-html-to-image": "^5.0.0",
     "openai": "^6.7.0",
     "qrcode": "^1.5.4",
-    "speakeasy": "^2.0.0"
+    "speakeasy": "^2.0.0",
+    "mysql2": "^3.11.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

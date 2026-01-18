@@ -4,15 +4,14 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { execSync } = require('child_process');
 const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Configurações - Token PayZu carregado do arquivo .env
-const PAYZU_TOKEN = process.env.PAYZU_TOKEN;
-const PAYZU_BASE_URL = 'https://api.payzu.processamento.com/v1';
+// Configurações - Token CREDPIX carregado do arquivo .env (modo legado)
+const CREDPIX_TOKEN = process.env.CREDPIX_TOKEN;
+const CREDPIX_BASE_URL = process.env.CREDPIX_BASE_URL || '';
 
 // Números autorizados a usar o bot (separados por vírgula no .env)
 const AUTHORIZED_NUMBERS = process.env.AUTHORIZED_NUMBERS
@@ -70,6 +69,36 @@ function formatBRL(value) {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
     });
+}
+
+async function getUserByChatId(chatid) {
+    const rows = await db.query(
+        `SELECT id, chatid, nome, saldo, limite_saque, reservado, user_token, platform_token, status
+         FROM users
+         WHERE chatid = ?
+         LIMIT 1`,
+        [chatid]
+    );
+    return rows[0] || null;
+}
+
+async function updateUserBalance(chatid, delta, reason = null) {
+    const user = await getUserByChatId(chatid);
+    if (!user) return null;
+
+    const saldoAntes = parseFloat(user.saldo || 0);
+    const saldoDepois = parseFloat((saldoAntes + delta).toFixed(2));
+
+    await db.query(
+        'UPDATE users SET saldo = ? WHERE chatid = ?',
+        [saldoDepois, chatid]
+    );
+
+    return {
+        saldoAntes,
+        saldoDepois,
+        reason
+    };
 }
 
 /**
@@ -137,6 +166,7 @@ const aiService = require('./ai-chat');
 const contactsService = require('./contacts');
 const mediaService = require('./media-service');
 const transactionsService = require('./transactions');
+const db = require('./db');
 const receiptGenerator = require('./receipt-generator');
 
 // Importar serviços Multi-Tenant, Autenticação Admin e Bots
@@ -156,13 +186,13 @@ if (MULTI_TENANT_MODE) {
     console.log(`   Clientes cadastrados: ${stats.total} (${stats.active} ativos)`);
     console.log(`   Números autorizados: ${stats.totalNumbers}`);
 } else {
-    // Modo single-tenant (legado) - requer PAYZU_TOKEN no .env
-    if (!PAYZU_TOKEN) {
-        console.warn('\n AVISO: Nenhum cliente cadastrado e PAYZU_TOKEN não configurado!');
-        console.warn('   Acesse /admin para cadastrar clientes ou configure PAYZU_TOKEN no .env.\n');
+    // Modo single-tenant (legado) - requer CREDPIX_TOKEN no .env
+    if (!CREDPIX_TOKEN) {
+        console.warn('\n AVISO: Nenhum cliente cadastrado e CREDPIX_TOKEN não configurado!');
+        console.warn('   Acesse /admin para cadastrar clientes ou configure CREDPIX_TOKEN no .env.\n');
     } else {
         console.log('\nMODO SINGLE-TENANT (legado)');
-        console.log('   Usando PAYZU_TOKEN do .env');
+        console.log('   Usando CREDPIX_TOKEN do .env');
 
         // Avisar se não há números autorizados configurados
         if (AUTHORIZED_NUMBERS.length === 0) {
@@ -179,7 +209,7 @@ const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
     : `http://localhost:${PORT}`;
 
-console.log(`📡 URL de Callback: ${BASE_URL}/webhook/payzu`);
+console.log(`📡 URL de Callback: ${BASE_URL}/webhook/credpix`);
 
 // Armazenar contexto de imagens pendentes (quando usuário manda foto e depois valor)
 // Formato: { phoneNumber: { pixKey, pixKeyType, timestamp } }
@@ -264,8 +294,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
         res.status(200).send('OK');
 
         // ========== IDENTIFICAÇÃO DO BOT ==========
-        // O bot é identificado via query parameter: /webhook/whatsapp?bot=payzu
-        const botId = req.query.bot || 'payzu'; // Default para PayZu
+        // O bot é identificado via query parameter: /webhook/whatsapp?bot=credpix
+        const botId = req.query.bot || 'credpix'; // Default para CREDPIX
         const currentBot = botService.getBotById(botId);
 
         if (!currentBot) {
@@ -407,7 +437,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
         // CONTROLE DE ACESSO - Multi-tenant ou Single-tenant (legado)
         let currentTenant = null;
-        let currentPayzuToken = null;
+        let currentCredpixToken = null;
         let currentPixKey = null;
 
         // Tentar buscar tenant pelo número
@@ -429,7 +459,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
                 }
             }
 
-            currentPayzuToken = currentTenant.payzuToken;
+            currentCredpixToken = currentTenant.platformToken;
             currentPixKey = currentTenant.myPixKey;
             console.log(`\n🏢 MULTI-TENANT: Cliente "${currentTenant.name}" (${currentTenant.id}) via bot ${botId}`);
         } else {
@@ -458,14 +488,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
                     console.log(`\n🚫 Acesso NEGADO - Número não autorizado: ${phoneNumber}`);
                     return;
                 }
-            } else if (!PAYZU_TOKEN) {
-                // Sem tenants, sem AUTHORIZED_NUMBERS e sem PAYZU_TOKEN
-                console.log(`\n🚫 Sem clientes cadastrados e sem PAYZU_TOKEN configurado`);
+            } else if (!CREDPIX_TOKEN) {
+                // Sem tenants, sem AUTHORIZED_NUMBERS e sem CREDPIX_TOKEN
+                console.log(`\n🚫 Sem clientes cadastrados e sem CREDPIX_TOKEN configurado`);
                 return;
             }
 
             // Modo legado: usar credenciais do .env
-            currentPayzuToken = PAYZU_TOKEN;
+            currentCredpixToken = CREDPIX_TOKEN;
             currentPixKey = process.env.MY_PIX_KEY;
             console.log(`\nSINGLE-TENANT: Usando credenciais do .env`);
         }
@@ -1075,14 +1105,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
     }
 });
 
-// ========== WEBHOOK PAYZU (Confirmações de Transação) ==========
+// ========== WEBHOOK CREDPIX (Confirmações de Transação) ==========
 
-app.post('/webhook/payzu', async (req, res) => {
-    // Responder imediatamente com 200 OK (requisito PayZu: < 10 segundos)
+app.post('/webhook/credpix', async (req, res) => {
+    // Responder imediatamente com 200 OK (requisito CREDPIX: < 10 segundos)
     res.status(200).send('OK');
 
     try {
-        console.log('\n📥 WEBHOOK PAYZU RECEBIDO:');
+        console.log('\n📥 WEBHOOK CREDPIX RECEBIDO:');
         console.log(JSON.stringify(req.body, null, 2));
 
         const {
@@ -1123,7 +1153,7 @@ app.post('/webhook/payzu', async (req, res) => {
         }
 
         // Buscar transação registrada
-        const transaction = transactionsService.getTransaction(id);
+        const transaction = await transactionsService.getTransaction(id);
 
         if (!transaction) {
             console.log(`Transação ${id} não encontrada no registro local`);
@@ -1135,7 +1165,7 @@ app.post('/webhook/payzu', async (req, res) => {
         const previousStatus = transaction.status;
 
         // Obter branding e credenciais Z-API do bot que processou esta transação
-        const transactionBotId = transaction.botId || 'payzu';
+        const transactionBotId = transaction.botId || 'credpix';
         const botBranding = botService.getBotBranding(transactionBotId);
         const zapiCredentials = botService.getBotZapiCredentials(transactionBotId);
         console.log(`🎨 Bot da transação: ${transactionBotId} (${botBranding?.name || 'N/A'})`);
@@ -1146,7 +1176,29 @@ app.post('/webhook/payzu', async (req, res) => {
         const sendButtons = (to, msg, btns) => whatsappService.sendButtons(to, msg, btns, zapiCredentials);
 
         // Atualizar status da transação
-        transactionsService.updateTransaction(id, status, req.body);
+        await transactionsService.updateTransaction(id, status, req.body);
+
+        // Atualizar saldo quando transação é concluída
+        if (status === 'COMPLETED') {
+            const amountValue = parseFloat(amount || 0);
+            const isDeposit = type === 'DEPOSIT' || transaction.type === 'pix_in';
+            const delta = isDeposit ? amountValue : -amountValue;
+            const balanceSnapshot = await updateUserBalance(phoneNumber, delta, 'transaction_completed');
+
+            if (balanceSnapshot) {
+                if (isDeposit) {
+                    await db.query(
+                        'UPDATE pagamentos SET saldo_antes = ?, saldo_depois = ? WHERE identifier = ?',
+                        [balanceSnapshot.saldoAntes, balanceSnapshot.saldoDepois, id]
+                    );
+                } else {
+                    await db.query(
+                        'UPDATE saques_pix SET saldoantes = ?, saldodepois = ? WHERE txid = ?',
+                        [balanceSnapshot.saldoAntes, balanceSnapshot.saldoDepois, id]
+                    );
+                }
+            }
+        }
 
         // Só notificar se o status mudou
         if (status === previousStatus) {
@@ -1276,7 +1328,7 @@ app.post('/webhook/payzu', async (req, res) => {
                             // Quem recebe o estorno (você)
                             receiverName: generatedName || payerName || 'N/A',
                             receiverDocument: generatedDocument || payerDocument || '',
-                            receiverBank: generatedInstitutionName || payerInstitutionName || 'PayZu'
+                            receiverBank: generatedInstitutionName || payerInstitutionName || 'CREDPIX'
                         };
 
                         const receiptBase64 = await receiptGenerator.generateReceiptBase64(receiptData, botBranding);
@@ -1450,7 +1502,7 @@ app.post('/webhook/payzu', async (req, res) => {
         }
 
     } catch (error) {
-        console.error('💥 Erro no webhook PayZu:', error.message);
+        console.error('💥 Erro no webhook CREDPIX:', error.message);
     }
 });
 
@@ -1459,164 +1511,94 @@ async function executePixCommand(command, phoneNumber, options = {}) {
     console.log('\n⚙️ Executando comando:', command.action);
 
     // Resolver credenciais: opções passadas > tenant > env
-    let payzuToken = options.payzuToken;
+    let platformToken = options.platformToken;
     let myPixKey = options.myPixKey;
     let contactsOwnerId = options.contactsOwnerId; // ID para contatos (tenant ou phone)
 
     // Credenciais Z-API, branding e ID do bot (opcionais)
     const zapiCredentials = options.zapiCredentials || null;
     const botBranding = options.botBranding || null;
-    const botId = options.botId || 'payzu'; // ID do bot para rastreamento
+    const botId = options.botId || 'credpix'; // ID do bot para rastreamento
 
     // Helpers locais para envio de mensagens (com credenciais do bot se disponíveis)
     const sendMessage = (to, msg) => whatsappService.sendMessage(to, msg, zapiCredentials);
     const sendImage = (to, img, caption) => whatsappService.sendImage(to, img, caption, zapiCredentials);
     const sendButtons = (to, msg, btns) => whatsappService.sendButtons(to, msg, btns, zapiCredentials);
 
-    if (!payzuToken) {
+    if (!platformToken) {
         const tenant = tenantService.getTenantByPhone(phoneNumber);
         if (tenant && tenant.active) {
-            payzuToken = tenant.payzuToken;
+            platformToken = tenant.platformToken;
             myPixKey = tenant.myPixKey;
             contactsOwnerId = tenant.id; // Usar ID do tenant para contatos
             console.log(`   🏢 Usando token do cliente: ${tenant.name}`);
         } else {
-            payzuToken = PAYZU_TOKEN;
+            platformToken = CREDPIX_TOKEN;
             myPixKey = process.env.MY_PIX_KEY;
             contactsOwnerId = phoneNumber; // Modo legado: usar phone
             console.log(`   Usando token do .env`);
         }
     } else if (!contactsOwnerId) {
-        // Se tem payzuToken mas não tem contactsOwnerId, usar phone
+        // Se tem platformToken mas não tem contactsOwnerId, usar phone
         contactsOwnerId = phoneNumber;
-    }
-
-    if (!payzuToken) {
-        console.error('Nenhum token PayZu disponível!');
-        await sendMsg(phoneNumber, 'Erro de configuração. Contate o administrador.');
-        return;
     }
 
     try {
         switch (command.action) {
             case 'generate_pix':
-                // Gerar PIX - PayZu usa valores em REAIS (não centavos)
+                // Gerar PIX - CREDPIX usa valores em REAIS (não centavos)
                 const amountInReais = (command.amount / 100).toFixed(2);
-                const tempScriptPixIn = `/tmp/pix_${Date.now()}.sh`;
-                const callbackUrl = `${BASE_URL}/webhook/payzu`;
-                const scriptContent = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/pix' \\
---header 'Content-Type: application/json' \\
---header 'Authorization: Bearer ${payzuToken}' \\
---data '{
-    "amount": ${amountInReais},
-    "callbackUrl": "${callbackUrl}",
-    "expiresIn": 86400
-  }' \\
--s -w '\\n__HTTP_STATUS__:%{http_code}'`;
+                const identifier = transactionsService.generateClientReference();
+                const copiaECola = `CREDPIX-${identifier}`;
+                const user = await getUserByChatId(phoneNumber);
 
-                fs.writeFileSync(tempScriptPixIn, scriptContent, { mode: 0o755 });
-                const pixOutputRaw = execSync(`bash ${tempScriptPixIn}`, { encoding: 'utf-8' });
-                fs.unlinkSync(tempScriptPixIn);
-
-                // Separar body e status code
-                const pixParts = pixOutputRaw.split('__HTTP_STATUS__:');
-                const pixBody = pixParts[0].trim();
-                const pixHttpStatus = pixParts[1] ? pixParts[1].trim() : 'unknown';
-
-                // DEBUG
-                console.log('\n🔍 DEBUG - Resposta do PIX:');
-                console.log('URL:', `${PAYZU_BASE_URL}/pix`);
-                console.log('HTTP Status:', pixHttpStatus);
-                console.log('Body:', pixBody.substring(0, 500));
-
-                // Verificar erro HTTP
-                if (pixHttpStatus !== '200' && pixHttpStatus !== '201') {
-                    console.error('Erro HTTP na API PayZu:', pixHttpStatus);
-                    let pixErrorMsg = '';
-                    switch (pixHttpStatus) {
-                        case '401':
-                            pixErrorMsg = '🔐 Token inválido ou expirado.';
-                            break;
-                        case '403':
-                            pixErrorMsg = '🚫 Acesso negado.';
-                            break;
-                        case '502':
-                            pixErrorMsg = '🔧 Servidor PayZu indisponível (502). Tente novamente.';
-                            break;
-                        default:
-                            pixErrorMsg = `Erro na API (HTTP ${pixHttpStatus}).`;
+                await transactionsService.registerTransaction(
+                    identifier,
+                    phoneNumber,
+                    'pix_in',
+                    command.amount,
+                    {
+                        brCode: copiaECola,
+                        tokenuser: user?.user_token || platformToken || null,
+                        botId
                     }
-                    await sendMessage(phoneNumber, `Erro ao gerar PIX:\n\n${pixErrorMsg}`);
-                    break;
-                }
+                );
 
-                // Verificar se é JSON
-                if (!pixBody || pixBody.startsWith('<')) {
-                    console.error('Resposta não é JSON:', pixBody.substring(0, 200));
-                    await sendMessage(phoneNumber, 'Erro ao gerar PIX:\n\n🔧 Resposta inválida do servidor.');
-                    break;
-                }
+                // Salvar código PIX para botão "copiar código"
+                lastGeneratedPixCodes.set(phoneNumber, {
+                    pixCode: copiaECola,
+                    amount: parseFloat(amountInReais),
+                    timestamp: Date.now()
+                });
 
-                try {
-                    const pixData = JSON.parse(pixBody);
+                // Mensagem 1: Informações do PIX
+                const infoMessage = `*PIX Gerado para Receber!*\n\n` +
+                    `Valor: *R$ ${parseFloat(amountInReais).toFixed(2)}*\n` +
+                    `⏰ Expira em: 24 horas\n\n` +
+                    `*Código Copia e Cola:*`;
 
-                    // PayZu retorna id e status diretamente (sem campo "success")
-                    if (pixData.id && pixData.status === 'PENDING') {
-                        const copiaECola = pixData.qrCodeText || '';
+                await sendMessage(phoneNumber, infoMessage);
 
-                        // Registrar transação para receber webhook de confirmação
-                        transactionsService.registerTransaction(
-                            pixData.id,
-                            phoneNumber,
-                            'pix_in',
-                            command.amount,
-                            { qrCodeText: copiaECola, botId }
-                        );
+                // Mensagem 2: Só o código copia e cola (fácil de copiar)
+                await sendMessage(phoneNumber, copiaECola);
 
-                        // Salvar código PIX para botão "copiar código"
-                        lastGeneratedPixCodes.set(phoneNumber, {
-                            pixCode: copiaECola,
-                            amount: parseFloat(pixData.amount),
-                            timestamp: Date.now()
-                        });
-
-                        // Mensagem 1: Informações do PIX
-                        const infoMessage = `*PIX Gerado para Receber!*\n\n` +
-                            `Valor: *R$ ${parseFloat(pixData.amount).toFixed(2)}*\n` +
-                            `⏰ Expira em: 24 horas\n\n` +
-                            `*Código Copia e Cola:*`;
-
-                        await sendMessage(phoneNumber, infoMessage);
-
-                        // Mensagem 2: Só o código copia e cola (fácil de copiar)
-                        await sendMessage(phoneNumber, copiaECola);
-
-                        // Mensagem 3: Instruções (sem botão - WhatsApp não tem "copiar para área de transferência")
-                        await sendMessage(phoneNumber,
-                            `*Copie o código acima*\n\n` +
-                            `Abra o app do banco de quem vai pagar\n` +
-                            `Escolha "Pagar com PIX" → "Copia e Cola"\n` +
-                            `Cole o código e confirme\n\n` +
-                            `Você será notificado quando o pagamento for confirmado!`);
-                    } else {
-                        const errorMsg = pixData.message || pixData.error || 'Erro desconhecido';
-                        await sendMessage(phoneNumber, `Erro ao gerar PIX: ${errorMsg}`);
-                    }
-                } catch (parseError) {
-                    console.error('Erro ao fazer parse:', parseError.message);
-                    await sendMessage(phoneNumber, 'Erro ao gerar PIX:\n\n🔧 Resposta inválida.');
-                }
+                // Mensagem 3: Instruções (sem botão - WhatsApp não tem "copiar para área de transferência")
+                await sendMessage(phoneNumber,
+                    `*Copie o código acima*\n\n` +
+                    `Abra o app do banco de quem vai pagar\n` +
+                    `Escolha "Pagar com PIX" → "Copia e Cola"\n` +
+                    `Cole o código e confirme\n\n` +
+                    `Você será notificado quando o pagamento for confirmado!`);
                 break;
 
             case 'withdraw':
-                // Processar saque/transferência PIX - PayZu usa valores em REAIS
+                // Processar saque/transferência PIX - CREDPIX usa valores em REAIS
                 // LIMITE: R$ 10.000,00 por transação - dividir automaticamente
                 const LIMITE_POR_TRANSACAO = 1000000; // R$ 10.000,00 em centavos
                 const totalCentavos = command.amount;
                 const totalReais = (totalCentavos / 100).toFixed(2);
 
-                // Converter tipo de chave para minúsculas (PayZu)
+                // Converter tipo de chave para minúsculas (CREDPIX)
                 let pixKeyType = command.pixKeyType.toLowerCase();
                 if (pixKeyType === 'random') pixKeyType = 'evp';
 
@@ -1691,7 +1673,7 @@ curl --location '${PAYZU_BASE_URL}/pix' \\
                     });
                 }
 
-                console.log('\nDADOS DO SAQUE (PayZu):');
+                console.log('\nDADOS DO SAQUE (CREDPIX):');
                 console.log('   Total (centavos):', totalCentavos);
                 console.log('   Total (reais):', totalReais);
                 console.log('   PIX Key:', pixKey);
@@ -1723,118 +1705,56 @@ curl --location '${PAYZU_BASE_URL}/pix' \\
                 let sucessos = 0;
                 let falhas = 0;
                 const resultados = [];
+                const user = await getUserByChatId(phoneNumber);
 
                 for (let i = 0; i < transacoes.length; i++) {
                     const valorTransacao = transacoes[i];
                     const valorReais = (valorTransacao / 100).toFixed(2);
 
-                    console.log(`\nExecutando transação ${i + 1}/${transacoes.length}: R$ ${valorReais}`);
+                    console.log(`\nRegistrando transação ${i + 1}/${transacoes.length}: R$ ${valorReais}`);
 
-                    const tempScriptWithdraw = `/tmp/withdraw_${Date.now()}_${i}.sh`;
-                    const withdrawCallbackUrl = `${BASE_URL}/webhook/payzu`;
                     // clientReference único: groupId + índice (ou só clientReference se transação única)
                     const txClientRef = groupId ? `${clientReference}_${i}` : clientReference;
-                    const withdrawScript = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/withdraw' \\
---header 'Content-Type: application/json' \\
---header 'Accept: application/json' \\
---header 'Authorization: Bearer ${payzuToken}' \\
---data '{
-    "amount": ${valorReais},
-    "pixKey": "${pixKey}",
-    "pixType": "${pixKeyType}",
-    "clientReference": "${txClientRef}",
-    "callbackUrl": "${withdrawCallbackUrl}"
-}' \\
--s -w '\\n__HTTP_STATUS__:%{http_code}'`;
-
-                    fs.writeFileSync(tempScriptWithdraw, withdrawScript, { mode: 0o755 });
 
                     try {
-                        const withdrawOutputRaw = execSync(`bash ${tempScriptWithdraw}`, { encoding: 'utf-8' });
-                        fs.unlinkSync(tempScriptWithdraw);
-
-                        const withdrawParts = withdrawOutputRaw.split('__HTTP_STATUS__:');
-                        const withdrawBody = withdrawParts[0].trim();
-                        const withdrawHttpStatus = withdrawParts[1] ? withdrawParts[1].trim() : 'unknown';
-
-                        console.log(`   HTTP Status: ${withdrawHttpStatus}`);
-                        console.log(`   Body completo:`, withdrawBody);
-
-                        if (withdrawHttpStatus === '200' || withdrawHttpStatus === '201') {
-                            const withdrawData = JSON.parse(withdrawBody);
-                            if (withdrawData.id) {
-                                sucessos++;
-
-                                // Capturar nome do destinatário se disponível
-                                const receiverName = withdrawData.receiverName ||
-                                                    withdrawData.payeeName ||
-                                                    withdrawData.beneficiaryName ||
-                                                    withdrawData.holderName ||
-                                                    withdrawData.name ||
-                                                    null;
-
-                                resultados.push({
-                                    valor: valorReais,
-                                    status: 'ok',
-                                    id: withdrawData.id,
-                                    receiverName: receiverName
-                                });
-
-                                console.log(`   Sucesso! ID: ${withdrawData.id}`);
-                                if (receiverName) {
-                                    console.log(`   Destinatário: ${receiverName}`);
-                                }
-
-                                // Registrar transação para receber webhook de confirmação
-                                transactionsService.registerTransaction(
-                                    withdrawData.id,
-                                    phoneNumber,
-                                    'pix_out',
-                                    valorTransacao,
-                                    { pixKey, pixKeyType, receiverName, groupId, clientReference: txClientRef, botId }
-                                );
-
-                                // Se faz parte de um grupo, adicionar ao grupo
-                                if (groupId) {
-                                    transactionsService.addTransactionToGroup(groupId, withdrawData.id);
-                                }
-                            } else {
-                                falhas++;
-                                resultados.push({ valor: valorReais, status: 'erro', msg: withdrawData.message || 'Erro desconhecido' });
-                                // Marcar falha imediata no grupo (para não ficar esperando webhook)
-                                if (groupId) {
-                                    transactionsService.markGroupTransactionFailed(groupId, valorTransacao, null);
-                                }
+                        await transactionsService.registerTransaction(
+                            txClientRef,
+                            phoneNumber,
+                            'pix_out',
+                            valorTransacao,
+                            {
+                                pixKey,
+                                pixKeyType,
+                                receiverName: command.receiverName || null,
+                                groupId,
+                                clientReference: txClientRef,
+                                tokenuser: user?.user_token || platformToken || null,
+                                botId
                             }
-                        } else {
-                            falhas++;
-                            let errorMsg = 'Erro HTTP ' + withdrawHttpStatus;
-                            try {
-                                const errData = JSON.parse(withdrawBody);
-                                errorMsg = errData.message || errorMsg;
-                            } catch (e) {}
-                            resultados.push({ valor: valorReais, status: 'erro', msg: errorMsg });
-                            console.log(`   Falha: ${errorMsg}`);
-                            // Marcar falha imediata no grupo (para não ficar esperando webhook)
-                            if (groupId) {
-                                transactionsService.markGroupTransactionFailed(groupId, valorTransacao, null);
-                            }
-                        }
-                    } catch (execError) {
-                        falhas++;
-                        resultados.push({ valor: valorReais, status: 'erro', msg: execError.message });
-                        console.error(`   Erro de execução: ${execError.message}`);
-                        try { fs.unlinkSync(tempScriptWithdraw); } catch (e) {}
-                        // Marcar falha imediata no grupo (para não ficar esperando webhook)
+                        );
+
+                        sucessos++;
+                        resultados.push({
+                            valor: valorReais,
+                            status: 'ok',
+                            id: txClientRef,
+                            receiverName: command.receiverName || null
+                        });
+
                         if (groupId) {
-                            transactionsService.markGroupTransactionFailed(groupId, valorTransacao, null);
+                            transactionsService.addTransactionToGroup(groupId, txClientRef);
+                        }
+                    } catch (error) {
+                        falhas++;
+                        resultados.push({ valor: valorReais, status: 'erro', msg: error.message });
+                        console.error(`   Erro de registro: ${error.message}`);
+                        if (groupId) {
+                            transactionsService.markGroupTransactionFailed(groupId, valorTransacao, txClientRef);
                         }
                     }
 
-                    // Pequeno delay entre transações para não sobrecarregar
                     if (i < transacoes.length - 1) {
-                        await new Promise(resolve => setTimeout(resolve, 500));
+                        await new Promise(resolve => setTimeout(resolve, 200));
                     }
                 }
 
@@ -1878,86 +1798,25 @@ curl --location '${PAYZU_BASE_URL}/withdraw' \\
                 break;
 
             case 'check_balance':
-                // Consultar saldo - PayZu retorna valores em REAIS
-                const tempScriptBalance = `/tmp/balance_${Date.now()}.sh`;
-                // Adiciona -w para capturar HTTP status code
-                const balanceScript = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/user/balance' \\
---header 'Accept: application/json' \\
---header 'Authorization: Bearer ${payzuToken}' \\
--s -w '\\n__HTTP_STATUS__:%{http_code}'`;
-
-                fs.writeFileSync(tempScriptBalance, balanceScript, { mode: 0o755 });
-                const balanceOutputRaw = execSync(`bash ${tempScriptBalance}`, { encoding: 'utf-8' });
-                fs.unlinkSync(tempScriptBalance);
-
-                // Separar body e status code
-                const balanceParts = balanceOutputRaw.split('__HTTP_STATUS__:');
-                const balanceBody = balanceParts[0].trim();
-                const balanceHttpStatus = balanceParts[1] ? balanceParts[1].trim() : 'unknown';
-
-                // DEBUG: Ver resposta raw da API
-                console.log('\n🔍 DEBUG - Resposta do balance:');
-                console.log('URL:', `${PAYZU_BASE_URL}/user/balance`);
-                console.log('HTTP Status:', balanceHttpStatus);
-                console.log('Body (primeiros 500 chars):', balanceBody.substring(0, 500));
-
-                // Verificar se houve erro HTTP
-                if (balanceHttpStatus !== '200') {
-                    console.error('Erro HTTP na API PayZu:', balanceHttpStatus);
-                    let errorMsg = '';
-                    switch (balanceHttpStatus) {
-                        case '401':
-                            errorMsg = '🔐 Token inválido ou expirado. Contate o administrador.';
-                            break;
-                        case '403':
-                            errorMsg = '🚫 Acesso negado. Verifique permissões do token.';
-                            break;
-                        case '502':
-                            errorMsg = '🔧 Servidor PayZu indisponível (502). Tente novamente em alguns minutos.';
-                            break;
-                        case '503':
-                            errorMsg = '🔧 Servidor PayZu em manutenção (503). Tente mais tarde.';
-                            break;
-                        default:
-                            errorMsg = `Erro na API PayZu (HTTP ${balanceHttpStatus}). Tente novamente.`;
-                    }
-                    await sendMessage(phoneNumber, `Erro ao consultar saldo:\n\n${errorMsg}`);
+                // Consultar saldo na CREDPIX (banco de dados)
+                const userBalance = await getUserByChatId(phoneNumber);
+                if (!userBalance) {
+                    await sendMessage(phoneNumber,
+                        'Não encontrei seu cadastro na CREDPIX.\n' +
+                        'Peça ao administrador para cadastrar seu número.');
                     break;
                 }
 
-                // Verificar se resposta é JSON válido
-                if (!balanceBody || balanceBody.startsWith('<') || balanceBody.startsWith('<!')) {
-                    console.error('Resposta não é JSON:', balanceBody.substring(0, 200));
-                    await sendMessage(phoneNumber,
-                        'Erro ao consultar saldo:\n\n🔧 Servidor retornou resposta inválida. Tente novamente.');
-                    break;
-                }
+                const saldoDisponivel = parseFloat(userBalance.saldo || 0);
+                const saldoBloqueado = parseFloat(userBalance.reservado || 0);
+                const saldoSaque = parseFloat(userBalance.limite_saque || saldoDisponivel);
 
-                try {
-                    const balanceData = JSON.parse(balanceBody);
+                const balanceMessage = `*Seu saldo:*\n\n` +
+                    `Disponível: R$ ${formatBRL(saldoDisponivel)}\n` +
+                    `Bloqueado: R$ ${formatBRL(saldoBloqueado)}\n` +
+                    `Para saque: R$ ${formatBRL(saldoSaque)}`;
 
-                    // Verificar se há erro na resposta JSON
-                    if (balanceData.error || balanceData.message) {
-                        const apiError = balanceData.message || balanceData.error;
-                        console.error('Erro retornado pela API:', apiError);
-                        await sendMessage(phoneNumber, `Erro ao consultar saldo:\n\n${apiError}`);
-                        break;
-                    }
-
-                    // PayZu retorna: balanceAvailable, balanceBlocked, balanceAvailableWithdraw (em reais)
-                    const balanceMessage = `*Seu saldo:*\n\n` +
-                        `Disponível: R$ ${formatBRL(balanceData.balanceAvailable || 0)}\n` +
-                        `Bloqueado: R$ ${formatBRL(balanceData.balanceBlocked || 0)}\n` +
-                        `Para saque: R$ ${formatBRL(balanceData.balanceAvailableWithdraw || 0)}`;
-
-                    await sendMessage(phoneNumber, balanceMessage);
-                } catch (parseError) {
-                    console.error('Erro ao fazer parse do JSON:', parseError.message);
-                    console.error('Body recebido:', balanceBody.substring(0, 300));
-                    await sendMessage(phoneNumber,
-                        'Erro ao consultar saldo:\n\n🔧 Resposta inválida do servidor. Tente novamente.');
-                }
+                await sendMessage(phoneNumber, balanceMessage);
                 break;
 
             case 'my_pix_key':
@@ -2086,7 +1945,7 @@ curl --location '${PAYZU_BASE_URL}/user/balance' \\
                     const effectiveSearchAmount = refundAmount && !searchAmount ? null : searchAmount;
 
                     // Buscar transações que podem ser estornadas
-                    const refundable = transactionsService.findRefundableTransactions(phoneNumber, effectiveSearchAmount, 5);
+                    const refundable = await transactionsService.findRefundableTransactions(phoneNumber, effectiveSearchAmount, 5);
 
                     if (refundable.length === 0) {
                         let notFoundMsg = `*Nenhum PIX encontrado para estorno*\n\n`;
@@ -2179,199 +2038,60 @@ curl --location '${PAYZU_BASE_URL}/user/balance' \\
                 break;
 
             case 'refund':
-                // Estornar um PIX recebido (devolução)
+                // Estornar um PIX recebido (registro na CREDPIX)
                 try {
                     const transactionId = command.transactionId;
-                    const endToEndId = command.endToEndId;
                     const reason = command.reason || 'Devolução solicitada pelo cliente';
 
-                    if (!transactionId && !endToEndId) {
+                    if (!transactionId) {
                         await sendMessage(phoneNumber,
                             `*ID do PIX não informado*\n\n` +
                             `Para estornar um PIX, preciso do ID da transação.\n\n` +
-                            `Você pode encontrar o ID:\n` +
-                            `• No comprovante do PIX recebido\n` +
-                            `• Começa com "PAYZU..." ou "E..."` );
+                            `Você pode encontrar o ID no comprovante do PIX recebido.`);
                         break;
                     }
 
-                    // Verificar se é estorno parcial
-                    const partialRefundAmount = command.refundAmount; // em centavos
+                    const partialRefundAmount = command.refundAmount;
                     if (partialRefundAmount) {
                         const partialReais = (partialRefundAmount / 100).toFixed(2);
-                        await sendMessage(phoneNumber, `⏳ Processando estorno parcial de R$ ${partialReais}...`);
+                        await sendMessage(phoneNumber, `⏳ Registrando estorno parcial de R$ ${partialReais}...`);
                     } else {
-                        await sendMessage(phoneNumber, '⏳ Processando estorno...');
+                        await sendMessage(phoneNumber, '⏳ Registrando estorno...');
                     }
 
-                    // Montar body do request
-                    const refundBody = {};
-                    if (transactionId) refundBody.id = transactionId;
-                    if (endToEndId) refundBody.endToEndId = endToEndId;
-                    refundBody.description = reason;
-                    refundBody.callbackUrl = `${BASE_URL}/webhook/payzu`;
+                    const transaction = await transactionsService.getTransaction(transactionId);
+                    if (!transaction) {
+                        await sendMessage(phoneNumber,
+                            `Transação não encontrada. Verifique se o ID está correto.`);
+                        break;
+                    }
 
-                    // Se for estorno parcial, enviar o valor em REAIS (API PayZu usa reais)
-                    // Documentação PayZu não especifica campo - testando 'value' (padrão comum)
+                    const refundAmountCents = partialRefundAmount || transaction.amount;
+                    const refundAmountReais = (refundAmountCents / 100).toFixed(2);
+
+                    await transactionsService.updateTransaction(transactionId, 'REFUND_REQUESTED', {
+                        refundAmount: refundAmountReais,
+                        refundReason: reason
+                    });
+
+                    await transactionsService.markAsRefunded(transactionId);
+
+                    let successMsg = `✅ *Estorno solicitado com sucesso!*\n\n` +
+                        `Valor: *R$ ${formatBRL(refundAmountReais)}*`;
+
                     if (partialRefundAmount) {
-                        const partialValueReais = partialRefundAmount / 100;
-                        refundBody.value = partialValueReais; // Testar com 'value'
-                        refundBody.amount = partialValueReais; // Manter 'amount' também por segurança
-                        console.log(`Estorno PARCIAL: R$ ${partialValueReais.toFixed(2)}`);
-                        console.log(`📦 Body do estorno:`, JSON.stringify(refundBody));
+                        successMsg += ` _(parcial)_`;
                     }
 
-                    // Usar endpoint POST /pix/refund (conforme documentação PayZu)
-                    const refundUrl = `${PAYZU_BASE_URL}/pix/refund`;
+                    successMsg += `\nMotivo: ${reason}\n` +
+                        `ID: ${transactionId}\n\n` +
+                        `⏳ _O estorno será processado pela CREDPIX._`;
 
-                    const tempScriptRefund = `/tmp/refund_${Date.now()}.sh`;
-                    const refundScript = `#!/bin/bash
-curl --location --request POST '${refundUrl}' \\
---header 'Content-Type: application/json' \\
---header 'Authorization: Bearer ${payzuToken}' \\
---data '${JSON.stringify(refundBody)}' \\
--s`;
-
-                    fs.writeFileSync(tempScriptRefund, refundScript, { mode: 0o755 });
-                    console.log('📜 Script de estorno criado:', tempScriptRefund);
-                    console.log('URL:', refundUrl);
-                    console.log('Método: POST');
-                    console.log('Body:', JSON.stringify(refundBody, null, 2));
-
-                    const refundResult = execSync(`bash ${tempScriptRefund}`, {
-                        encoding: 'utf-8',
-                        timeout: 30000
-                    });
-
-                    // Limpar script temporário
-                    try { fs.unlinkSync(tempScriptRefund); } catch (e) { }
-
-                    console.log('📦 Resposta PayZu (Estorno) COMPLETA:', refundResult);
-
-                    // Parse da resposta
-                    const refundData = JSON.parse(refundResult);
-
-                    if (refundData.error || refundData.statusCode >= 400) {
-                        throw new Error(refundData.message || refundData.error || 'Erro ao processar estorno');
-                    }
-
-                    // Validar e extrair valor do estorno - priorizar refundAmount para estornos parciais
-                    let refundAmount = null;
-                    const originalAmount = refundData.amount || refundData.originalAmount;
-
-                    // Tentar extrair o valor do estorno de vários campos possíveis
-                    if (refundData.refundAmount !== undefined && refundData.refundAmount !== null) {
-                        refundAmount = parseFloat(refundData.refundAmount);
-                        console.log(`Valor do estorno (refundAmount): R$ ${refundAmount}`);
-                    } else if (refundData.returnedAmount !== undefined && refundData.returnedAmount !== null) {
-                        refundAmount = parseFloat(refundData.returnedAmount);
-                        console.log(`Valor do estorno (returnedAmount): R$ ${refundAmount}`);
-                    } else if (refundData.value !== undefined && refundData.value !== null) {
-                        refundAmount = parseFloat(refundData.value);
-                        console.log(`Valor do estorno (value): R$ ${refundAmount}`);
-                    } else if (originalAmount !== undefined && originalAmount !== null) {
-                        refundAmount = parseFloat(originalAmount);
-                        console.log(`Valor do estorno (amount/originalAmount): R$ ${refundAmount}`);
-                    }
-
-                    // Verificar se é estorno parcial
-                    const isPartialRefund = originalAmount && refundAmount &&
-                        parseFloat(originalAmount) > refundAmount;
-
-                    if (isPartialRefund) {
-                        console.log(`ESTORNO PARCIAL: R$ ${refundAmount} de R$ ${originalAmount}`);
-                    }
-
-                    const refundStatus = refundData.refundStatus || refundData.status;
-
-                    console.log('Dados do estorno:', {
-                        refundAmount,
-                        originalAmount,
-                        isPartialRefund,
-                        status: refundStatus,
-                        id: refundData.id
-                    });
-
-                    // Marcar transação como estornada no registro local
-                    if (transactionId) {
-                        transactionsService.markAsRefunded(transactionId);
-                    }
-
-                    // Usar motivo da API se disponível, senão usar o informado pelo usuário
-                    const finalReason = refundData.refundDescription || reason;
-
-                    // Gerar comprovante de estorno
-                    try {
-                        const receiptData = {
-                            type: 'refund',
-                            amount: refundAmount,
-                            originalAmount: isPartialRefund ? parseFloat(originalAmount) : null,
-                            isPartialRefund: isPartialRefund,
-                            transactionId: refundData.id || transactionId,
-                            refundReason: finalReason,
-                            refundEndToEndId: refundData.refundEndToEndId,
-                            // Dados do pagador original (quem recebeu e agora devolve)
-                            payerName: refundData.payerName || currentTenant?.name || 'N/A',
-                            payerDocument: refundData.payerDocument || '',
-                            payerBank: refundData.payerBank || 'PayZu',
-                            // Dados do recebedor (quem receberá a devolução)
-                            receiverName: refundData.receiverName || refundData.payerName || 'N/A',
-                            receiverDocument: refundData.receiverDocument || refundData.payerDocument || '',
-                            receiverBank: refundData.receiverBank || refundData.payerBank || ''
-                        };
-
-                        const receiptBase64 = await receiptGenerator.generateReceiptBase64(receiptData, botBranding);
-
-                        // Montar legenda do comprovante
-                        let caption = `↩️ *ESTORNO CONFIRMADO*\n\n` +
-                            `Valor: R$ ${formatBRL(refundAmount)}`;
-
-                        if (isPartialRefund) {
-                            caption += ` _(de R$ ${formatBRL(originalAmount)})_`;
-                        }
-
-                        caption += `\nMotivo: ${finalReason}`;
-
-                        if (refundData.refundEndToEndId) {
-                            caption += `\nE2E: ${refundData.refundEndToEndId}`;
-                        }
-
-                        await sendImage(phoneNumber, receiptBase64, caption);
-                        console.log('Comprovante de estorno enviado');
-                    } catch (receiptError) {
-                        console.error('Erro ao gerar comprovante de estorno:', receiptError.message);
-                        // Se falhar o comprovante, enviar mensagem de texto
-                        let successMsg = `↩️ *ESTORNO CONFIRMADO*\n\n` +
-                            `Valor: *R$ ${formatBRL(refundAmount)}*`;
-
-                        if (isPartialRefund) {
-                            successMsg += ` _(de R$ ${formatBRL(originalAmount)})_`;
-                        }
-
-                        successMsg += `\nStatus: ${refundStatus}\n` +
-                            `ID: ${refundData.id}\n` +
-                            (refundData.refundEndToEndId ? `E2E: ${refundData.refundEndToEndId}\n` : '') +
-                            `\nMotivo: ${finalReason}\n\n` +
-                            `⏳ _O valor será devolvido ao pagador._`;
-                        await sendMessage(phoneNumber, successMsg);
-                    }
-
+                    await sendMessage(phoneNumber, successMsg);
                 } catch (refundError) {
                     console.error('Erro no estorno:', refundError.message);
-
-                    let errorMsg = `*Erro ao estornar PIX*\n\n`;
-
-                    if (refundError.message.includes('not found')) {
-                        errorMsg += `Transação não encontrada.\nVerifique se o ID está correto.`;
-                    } else if (refundError.message.includes('already refunded')) {
-                        errorMsg += `Este PIX já foi estornado anteriormente.`;
-                    } else if (refundError.message.includes('expired')) {
-                        errorMsg += `Prazo para estorno expirado.\nPIX só pode ser estornado em até 90 dias.`;
-                    } else {
-                        errorMsg += `${refundError.message}`;
-                    }
-
-                    await sendMessage(phoneNumber, errorMsg);
+                    await sendMessage(phoneNumber,
+                        `*Erro ao estornar PIX*\n\n${refundError.message}`);
                 }
                 break;
 
@@ -2401,84 +2121,41 @@ curl --location --request POST '${refundUrl}' \\
 
 // ========== ROTAS PIX ==========
 
-// Rota para PIX In (Depósito) - PayZu API
+// Rota para PIX In (Depósito) - CREDPIX
 app.post('/api/pix-in', async (req, res) => {
-    const tempScript = `/tmp/pix_${Date.now()}.sh`;
-
     try {
-        const { amount, postbackUrl } = req.body;
-        const callback = postbackUrl || 'https://tight-holiday-28.webhook.cool';
-        // PayZu usa valores em REAIS (não centavos)
-        const amountInReais = (amount / 100).toFixed(2);
+        const { amount, chatid, phone, postbackUrl } = req.body;
+        const ownerChatId = chatid || phone;
 
-        console.log('\n🎯 GERANDO PIX REAL (PayZu) - Valor:', amount, 'centavos (R$', amountInReais, ')');
-
-        // Criar script temporário com comando curl para PayZu API
-        const scriptContent = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/pix' \\
---header 'Content-Type: application/json' \\
---header 'Authorization: Bearer ${PAYZU_TOKEN}' \\
---data '{
-    "callbackUrl": "'"${callback}"'",
-    "amount": '"${amountInReais}"',
-    "expiresIn": 86400
-  }' \\
--s`;
-
-        fs.writeFileSync(tempScript, scriptContent, { mode: 0o755 });
-
-        // Executar script
-        const output = execSync(`bash ${tempScript}`, { encoding: 'utf-8' });
-
-        // Limpar arquivo temporário
-        fs.unlinkSync(tempScript);
-
-        // Parse da resposta
-        const response = JSON.parse(output);
-
-        // PayZu retorna id e status diretamente
-        if (response.id && response.status) {
-            console.log('PIX REAL GERADO COM SUCESSO (PayZu)!');
-            console.log('   ID:', response.id);
-            console.log('   Status:', response.status);
-
-            // Normalizar resposta para o frontend (converter de volta para centavos)
-            const result = {
-                success: true,
-                id: response.id,
-                status: response.status,
-                amount: Math.round(parseFloat(response.amount) * 100), // Converter para centavos
-                expirationDate: response.createdAt,
-                pixCopiaECola: response.qrCodeText || '',
-                qrcode: response.qrCodeBase64 || '',
-                brcode: response.qrCodeText || ''
-            };
-
-            return res.json(result);
-        } else if (response.statusCode === 401) {
-            console.error('Erro 401: Token inválido');
-            return res.status(401).json({
+        if (!ownerChatId || !amount) {
+            return res.status(400).json({
                 error: true,
-                message: 'Token inválido. Por favor, atualize o PAYZU_TOKEN.',
-                details: response
+                message: 'Informe chatid (ou phone) e amount.'
             });
         }
 
-        // Se chegou aqui, algo deu errado
-        console.error('Erro ao gerar PIX:', response);
-        return res.status(400).json({
-            error: true,
-            message: response.message || response.error || 'Erro ao gerar PIX',
-            details: response
+        const amountInReais = (amount / 100).toFixed(2);
+        const identifier = transactionsService.generateClientReference();
+        const copiaECola = `CREDPIX-${identifier}`;
+        const user = await getUserByChatId(ownerChatId);
+
+        await transactionsService.registerTransaction(identifier, ownerChatId, 'pix_in', amount, {
+            brCode: copiaECola,
+            tokenuser: user?.user_token || CREDPIX_TOKEN || null,
+            callbackUrl: postbackUrl || null
         });
 
+        return res.json({
+            success: true,
+            id: identifier,
+            status: 'PENDING',
+            amount,
+            expirationDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            pixCopiaECola: copiaECola,
+            brcode: copiaECola
+        });
     } catch (error) {
-        // Limpar arquivo temporário em caso de erro
-        if (fs.existsSync(tempScript)) {
-            fs.unlinkSync(tempScript);
-        }
-
-        console.error('💥 Erro crítico:', error.message);
+        console.error('💥 Erro ao processar depósito:', error.message);
         res.status(500).json({
             error: true,
             message: 'Erro ao processar depósito',
@@ -2487,81 +2164,38 @@ curl --location '${PAYZU_BASE_URL}/pix' \\
     }
 });
 
-// Rota para PIX Out (Saque) - PayZu API
+// Rota para PIX Out (Saque) - CREDPIX
 app.post('/api/pix-out', async (req, res) => {
-    const tempScript = `/tmp/pix_out_${Date.now()}.sh`;
-
     try {
-        const { amount, pixKey, pixKeyType } = req.body;
-        // PayZu usa valores em REAIS (não centavos)
-        const amountInReais = (amount / 100).toFixed(2);
+        const { amount, pixKey, pixKeyType, chatid, phone } = req.body;
+        const ownerChatId = chatid || phone;
 
-        // Converter tipo de chave para minúsculas (PayZu)
-        let payzuKeyType = pixKeyType.toLowerCase();
-        if (payzuKeyType === 'random') payzuKeyType = 'evp';
-
-        // Para telefone, garantir código do país (55)
-        let payzuPixKey = pixKey;
-        if (payzuKeyType === 'phone' && !payzuPixKey.startsWith('55')) {
-            payzuPixKey = '55' + payzuPixKey;
-        }
-
-        console.log('\nPROCESSANDO SAQUE REAL (PayZu)');
-        console.log('   Valor:', amount, 'centavos (R$', amountInReais, ')');
-        console.log('   Destino:', payzuKeyType, '-', payzuPixKey);
-
-        // Criar script temporário
-        const scriptContent = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/withdraw' \\
---header 'Content-Type: application/json' \\
---header 'Accept: application/json' \\
---header 'Authorization: Bearer ${PAYZU_TOKEN}' \\
---data '{
-    "amount": '"${amountInReais}"',
-    "callbackUrl": "https://webhook.cool/at/bored-salesmen-91",
-    "pixKey": "'"${payzuPixKey}"'",
-    "pixType": "'"${payzuKeyType}"'"
-}' \\
--s`;
-
-        fs.writeFileSync(tempScript, scriptContent, { mode: 0o755 });
-
-        const output = execSync(`bash ${tempScript}`, { encoding: 'utf-8' });
-        fs.unlinkSync(tempScript);
-
-        const response = JSON.parse(output);
-
-        if (response.id && response.status) {
-            console.log('SAQUE PROCESSADO COM SUCESSO (PayZu)!');
-            console.log('   ID:', response.id);
-            console.log('   Status:', response.status);
-            // Normalizar resposta (converter para centavos para frontend)
-            return res.json({
-                ...response,
-                amount: Math.round(parseFloat(response.amount) * 100)
-            });
-        } else if (response.statusCode === 401) {
-            console.error('Erro 401: Token inválido');
-            return res.status(401).json({
+        if (!ownerChatId || !amount || !pixKey || !pixKeyType) {
+            return res.status(400).json({
                 error: true,
-                message: 'Token inválido.',
-                details: response
+                message: 'Informe chatid (ou phone), amount, pixKey e pixKeyType.'
             });
         }
 
-        console.error('Erro ao processar saque:', response);
-        return res.status(400).json({
-            error: true,
-            message: response.message || response.error || 'Erro ao processar saque',
-            details: response
+        const amountInReais = (amount / 100).toFixed(2);
+        const user = await getUserByChatId(ownerChatId);
+        const identifier = transactionsService.generateClientReference();
+
+        await transactionsService.registerTransaction(identifier, ownerChatId, 'pix_out', amount, {
+            pixKey,
+            pixKeyType,
+            tokenuser: user?.user_token || CREDPIX_TOKEN || null
         });
 
+        return res.json({
+            success: true,
+            id: identifier,
+            status: 'PENDING',
+            amount,
+            amountReais: amountInReais
+        });
     } catch (error) {
-        if (fs.existsSync(tempScript)) {
-            fs.unlinkSync(tempScript);
-        }
-
-        console.error('💥 Erro crítico:', error.message);
+        console.error('💥 Erro ao processar saque:', error.message);
         res.status(500).json({
             error: true,
             message: 'Erro ao processar saque',
@@ -2570,52 +2204,31 @@ curl --location '${PAYZU_BASE_URL}/withdraw' \\
     }
 });
 
-// Rota para consultar saldo em conta - PayZu API
+// Rota para consultar saldo em conta - CREDPIX
 app.get('/api/balance', async (req, res) => {
-    const tempScript = `/tmp/balance_${Date.now()}.sh`;
-
     try {
-        console.log('\nCONSULTANDO SALDO EM CONTA (PayZu)');
-
-        // Criar script temporário
-        const scriptContent = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/user/balance' \\
---header 'Accept: application/json' \\
---header 'Authorization: Bearer ${PAYZU_TOKEN}' \\
--s`;
-
-        fs.writeFileSync(tempScript, scriptContent, { mode: 0o755 });
-        const output = execSync(`bash ${tempScript}`, { encoding: 'utf-8' });
-        fs.unlinkSync(tempScript);
-
-        const response = JSON.parse(output);
-
-        // PayZu retorna balanceAvailable, balanceBlocked, balanceAvailableWithdraw (em REAIS)
-        if (response.balanceAvailable !== undefined) {
-            console.log('SALDO CONSULTADO COM SUCESSO (PayZu)!');
-            console.log('   Saldo disponível: R$', response.balanceAvailable);
-            // Converter para centavos para manter compatibilidade com frontend
-            return res.json({
-                balance: Math.round(parseFloat(response.balanceAvailable) * 100),
-                balanceAvailable: Math.round(parseFloat(response.balanceAvailable) * 100),
-                balanceBlocked: Math.round(parseFloat(response.balanceBlocked || 0) * 100),
-                balanceAvailableWithdraw: Math.round(parseFloat(response.balanceAvailableWithdraw || 0) * 100)
-            });
+        const chatid = req.query.chatid || req.query.phone;
+        if (!chatid) {
+            return res.status(400).json({ error: true, message: 'Informe chatid ou phone.' });
         }
 
-        console.error('Erro ao consultar saldo:', response);
-        return res.status(400).json({
-            error: true,
-            message: response.message || response.error || 'Erro ao consultar saldo',
-            details: response
+        const user = await getUserByChatId(chatid);
+        if (!user) {
+            return res.status(404).json({ error: true, message: 'Usuário não encontrado.' });
+        }
+
+        const saldoDisponivel = parseFloat(user.saldo || 0);
+        const saldoBloqueado = parseFloat(user.reservado || 0);
+        const saldoSaque = parseFloat(user.limite_saque || saldoDisponivel);
+
+        return res.json({
+            balance: Math.round(saldoDisponivel * 100),
+            balanceAvailable: Math.round(saldoDisponivel * 100),
+            balanceBlocked: Math.round(saldoBloqueado * 100),
+            balanceAvailableWithdraw: Math.round(saldoSaque * 100)
         });
-
     } catch (error) {
-        if (fs.existsSync(tempScript)) {
-            fs.unlinkSync(tempScript);
-        }
-
-        console.error('💥 Erro crítico:', error.message);
+        console.error('💥 Erro ao consultar saldo:', error.message);
         res.status(500).json({
             error: true,
             message: 'Erro ao consultar saldo',
@@ -2624,54 +2237,34 @@ curl --location '${PAYZU_BASE_URL}/user/balance' \\
     }
 });
 
-// Rota para consultar status de PIX In (Depósito) - PayZu API
+// Rota para consultar status de PIX In (Depósito) - CREDPIX
 app.get('/api/pix-in/:id', async (req, res) => {
-    const tempScript = `/tmp/pix_in_status_${Date.now()}.sh`;
-
     try {
         const { id } = req.params;
-        console.log('\n🔍 CONSULTANDO STATUS DO PIX IN (PayZu) - ID:', id);
+        const rows = await db.query(
+            'SELECT identifier, status, valor, data_criacao, brCode FROM pagamentos WHERE identifier = ? LIMIT 1',
+            [id]
+        );
 
-        // Criar script temporário
-        const scriptContent = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/pix/${id}' \\
---header 'Accept: application/json' \\
---header 'Authorization: Bearer ${PAYZU_TOKEN}' \\
--s`;
-
-        fs.writeFileSync(tempScript, scriptContent, { mode: 0o755 });
-        const output = execSync(`bash ${tempScript}`, { encoding: 'utf-8' });
-        fs.unlinkSync(tempScript);
-
-        const response = JSON.parse(output);
-
-        if (response.id) {
-            console.log('STATUS CONSULTADO (PayZu):', response.status);
-            return res.json({
-                success: true,
-                id: response.id,
-                status: response.status,
-                amount: Math.round(parseFloat(response.amount) * 100), // Converter para centavos
-                expirationDate: response.createdAt,
-                pixCopiaECola: response.qrCodeText || '',
-                qrcode: response.qrCodeBase64 || '',
-                brcode: response.qrCodeText || ''
+        if (rows.length === 0) {
+            return res.status(404).json({
+                error: true,
+                message: 'PIX não encontrado'
             });
         }
 
-        console.error('Erro ao consultar status:', response);
-        return res.status(404).json({
-            error: true,
-            message: 'PIX não encontrado',
-            details: response
+        const row = rows[0];
+        return res.json({
+            success: true,
+            id: row.identifier,
+            status: row.status,
+            amount: Math.round(parseFloat(row.valor) * 100),
+            expirationDate: row.data_criacao,
+            pixCopiaECola: row.brCode || '',
+            brcode: row.brCode || ''
         });
-
     } catch (error) {
-        if (fs.existsSync(tempScript)) {
-            fs.unlinkSync(tempScript);
-        }
-
-        console.error('💥 Erro crítico:', error.message);
+        console.error('💥 Erro ao consultar status:', error.message);
         res.status(500).json({
             error: true,
             message: 'Erro ao consultar status',
@@ -2680,49 +2273,31 @@ curl --location '${PAYZU_BASE_URL}/pix/${id}' \\
     }
 });
 
-// Rota para consultar status de PIX Out (Saque) - PayZu API
+// Rota para consultar status de PIX Out (Saque) - CREDPIX
 app.get('/api/pix-out/:id', async (req, res) => {
-    const tempScript = `/tmp/pix_out_status_${Date.now()}.sh`;
-
     try {
         const { id } = req.params;
-        console.log('\n🔍 CONSULTANDO STATUS DO SAQUE (PayZu) - ID:', id);
+        const rows = await db.query(
+            'SELECT txid, status, value, created_at FROM saques_pix WHERE txid = ? LIMIT 1',
+            [id]
+        );
 
-        // Criar script temporário - PayZu usa mesmo endpoint /pix/{id} para consultar
-        const scriptContent = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/pix/${id}' \\
---header 'Accept: application/json' \\
---header 'Authorization: Bearer ${PAYZU_TOKEN}' \\
--s`;
-
-        fs.writeFileSync(tempScript, scriptContent, { mode: 0o755 });
-        const output = execSync(`bash ${tempScript}`, { encoding: 'utf-8' });
-        fs.unlinkSync(tempScript);
-
-        const response = JSON.parse(output);
-
-        if (response.id) {
-            console.log('STATUS DO SAQUE (PayZu):', response.status);
-            // Normalizar resposta (converter para centavos)
-            return res.json({
-                ...response,
-                amount: Math.round(parseFloat(response.amount) * 100)
+        if (rows.length === 0) {
+            return res.status(404).json({
+                error: true,
+                message: 'Saque não encontrado'
             });
         }
 
-        console.error('Erro ao consultar status:', response);
-        return res.status(404).json({
-            error: true,
-            message: 'Saque não encontrado',
-            details: response
+        const row = rows[0];
+        return res.json({
+            id: row.txid,
+            status: row.status,
+            amount: Math.round(parseFloat(row.value) * 100),
+            createdAt: row.created_at
         });
-
     } catch (error) {
-        if (fs.existsSync(tempScript)) {
-            fs.unlinkSync(tempScript);
-        }
-
-        console.error('💥 Erro crítico:', error.message);
+        console.error('💥 Erro ao consultar status:', error.message);
         res.status(500).json({
             error: true,
             message: 'Erro ao consultar status',
@@ -2736,7 +2311,7 @@ app.get('/api/status', (req, res) => {
     res.json({
         status: 'online',
         mode: 'PRODUCTION',
-        message: 'Sistema conectado à API PayZu',
+        message: 'Sistema conectado à CREDPIX',
         apiStatus: 'FUNCIONANDO',
         pixIn: true,
         pixOut: true,
@@ -2844,7 +2419,7 @@ app.get('/api/tenants', requireAdminIP, adminAuth.requireAuth, (req, res) => {
         // Não expor tokens completos na listagem
         const safeTenants = tenants.map(t => ({
             ...t,
-            payzuToken: t.payzuToken ? `${t.payzuToken.substring(0, 10)}...` : null
+            platformToken: t.platformToken ? `${t.platformToken.substring(0, 10)}...` : null
         }));
         res.json(safeTenants);
     } catch (error) {
@@ -2865,15 +2440,15 @@ app.get('/api/tenants/stats', requireAdminIP, adminAuth.requireAuth, (req, res) 
 // Criar novo tenant
 app.post('/api/tenants', requireAdminIP, adminAuth.requireAuth, (req, res) => {
     try {
-        const { name, payzuToken, myPixKey, authorizedNumbers } = req.body;
+        const { name, platformToken, myPixKey, authorizedNumbers } = req.body;
 
-        if (!name || !payzuToken) {
-            return res.status(400).json({ error: 'Nome e token PayZu são obrigatórios' });
+        if (!name || !platformToken) {
+            return res.status(400).json({ error: 'Nome e token CREDPIX são obrigatórios' });
         }
 
         const tenant = tenantService.createTenant({
             name,
-            payzuToken,
+            platformToken,
             myPixKey,
             authorizedNumbers: authorizedNumbers || []
         });
@@ -2924,7 +2499,7 @@ app.delete('/api/tenants/:id', requireAdminIP, adminAuth.requireAuth, (req, res)
 app.listen(PORT, () => {
     console.log(`
     ╔══════════════════════════════════════════════╗
-    ║   PayZu PIX Manager - FUNCIONANDO!       ║
+    ║   CREDPIX PIX Manager - FUNCIONANDO!     ║
     ╠══════════════════════════════════════════════╣
     ║                                              ║
     ║  🚀 Servidor rodando em:                     ║
@@ -2933,47 +2508,15 @@ app.listen(PORT, () => {
     ║  📁 Acesse o sistema em:                     ║
     ║     http://localhost:${PORT}/index.html       ║
     ║                                              ║
-    ║  Status: API PayZu FUNCIONANDO           ║
-    ║  PIX In: Gerando PIX pagável             ║
-    ║  PIX Out: Processando saques reais       ║
+    ║  Status: CREDPIX ATIVA                       ║
+    ║  PIX In: Gerando cobranças                   ║
+    ║  PIX Out: Processando saques                 ║
     ║                                              ║
-    ║   LEMBRE: Saques requerem IP fixo!       ║
+    ║   LEMBRE: Saques requerem validação!     ║
     ║                                              ║
     ╚══════════════════════════════════════════════╝
 
-    💡 Esta versão usa a API PayZu.
-    📌 Base URL: ${PAYZU_BASE_URL}
+    💡 Esta versão usa o banco CREDPIX.
+    📌 Base URL configurada: ${CREDPIX_BASE_URL || 'não definida'}
     `);
-
-    // Testar conexão com API PayZu (apenas consulta de saldo)
-    console.log('\n🔍 Testando conexão com API PayZu...');
-
-    const testScript = `/tmp/test_startup_${Date.now()}.sh`;
-    const testScriptContent = `#!/bin/bash
-curl --location '${PAYZU_BASE_URL}/user/balance' \\
---header 'Accept: application/json' \\
---header 'Authorization: Bearer ${PAYZU_TOKEN}' \\
--s -w "\\nSTATUS:%{http_code}"`;
-
-    try {
-        fs.writeFileSync(testScript, testScriptContent, { mode: 0o755 });
-        const result = execSync(`bash ${testScript}`, { encoding: 'utf-8' });
-        fs.unlinkSync(testScript);
-
-        if (result.includes('STATUS:200')) {
-            console.log('API PayZu está funcionando!');
-            console.log('   Você pode gerar PIX real agora.');
-        } else if (result.includes('STATUS:401')) {
-            console.log('Token PayZu inválido ou expirado!');
-            console.log('   Atualize PAYZU_TOKEN no arquivo .env');
-        } else {
-            console.log('Erro ao conectar com API PayZu');
-            console.log('   Resposta:', result);
-        }
-    } catch (error) {
-        if (fs.existsSync(testScript)) {
-            fs.unlinkSync(testScript);
-        }
-        console.log('Erro ao testar API:', error.message);
-    }
 });

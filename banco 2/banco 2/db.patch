@@ -1,0 +1,31 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/banco 2/banco 2/db.js b/banco 2/banco 2/db.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..454f89d2e71120fff64bad5b48ffd3737cf22247
+--- /dev/null
++++ b/banco 2/banco 2/db.js	
+@@ -0,0 +1,21 @@
++const mysql = require('mysql2/promise');
++
++const pool = mysql.createPool({
++    host: 'localhost',
++    database: 'CREDPIX',
++    user: 'CREDPIX',
++    password: 'pwIemGmB7xCwF5RF9Z2F',
++    waitForConnections: true,
++    connectionLimit: 10,
++    queueLimit: 0
++});
++
++async function query(sql, params = []) {
++    const [rows] = await pool.execute(sql, params);
++    return rows;
++}
++
++module.exports = {
++    pool,
++    query
++};
+ 
+EOF
+)
